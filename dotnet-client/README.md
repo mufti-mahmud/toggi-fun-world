@@ -19,7 +19,7 @@ builder.Services.AddSingleton<ITfwTicketApiClient>(sp =>
     {
         // Standalone Server or Cloud Server
         BaseUrl = builder.Configuration["TfwTicketApi:BaseUrl"] ?? "http://localhost:5000",
-        ApiKey = builder.Configuration["TfwTicketApi:ApiKey"] ?? "tfw-full-access-key-2026",
+        ApiKey = builder.Configuration["TfwTicketApi:ApiKey"] ?? Environment.GetEnvironmentVariable("TFW_TICKET_API_KEY") ?? "",
         DefaultSenderName = "Turnstile Controller #1"
     });
 });
@@ -63,7 +63,7 @@ public class TurnstileController : ControllerBase
 var client = new TfwTicketApiClient(new TfwTicketApiOptions
 {
     BaseUrl = "http://localhost:5000",
-    ApiKey = "tfw-full-access-key-2026"
+    ApiKey = "<TICKET_API_KEY>"
 });
 
 var result = await client.RecordSaleAsync(counterId: 1, count: 5);

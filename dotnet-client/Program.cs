@@ -17,7 +17,7 @@ namespace Tfw.TicketSales.Demo
             var options = new TfwTicketApiOptions
             {
                 BaseUrl = "https://ais-pre-yh2u4e4b5lyucgbmyxk2sv-662885913055.asia-southeast1.run.app", // or "http://localhost:5000"
-                ApiKey = "tfw-full-access-key-2026",
+                ApiKey = Environment.GetEnvironmentVariable("TFW_TICKET_API_KEY") ?? "",
                 DefaultSenderName = "Bashundhara Gate 1 .NET Turnstile Controller"
             };
 

@@ -23,7 +23,7 @@ namespace Tfw.TicketSales.Client
         /// <summary>
         /// Master API Key for authentication.
         /// </summary>
-        public string ApiKey { get; set; } = "tfw-full-access-key-2026";
+        public string ApiKey { get; set; } = "";
 
         /// <summary>
         /// Default operator or application name (e.g. ".NET Turnstile Service").

@@ -20,6 +20,7 @@ import {
 import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite } from './sqliteDb';
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
 import { isManagementSalesMessage, parseManagementReportText, getSeedManagementReports } from './utils/whatsappManagementParser';
+import { createSiteAuth, readApiKey, safeEqual } from './siteAuth';
 
 // Ensure production mode if running from compiled server.cjs bundle
 if (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) {
@@ -35,6 +36,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
+
+// Secrets come only from the environment; see .env.example.
+const TICKET_API_MASTER_KEY = String(process.env.TICKET_API_KEY || '').trim();
+const WHATSAPP_WEBHOOK_SECRET = String(process.env.WHATSAPP_WEBHOOK_SECRET || '').trim();
+const GREEN_API_ENV_ID_INSTANCE = String(process.env.GREEN_API_ID_INSTANCE || '').trim();
+const GREEN_API_ENV_TOKEN_INSTANCE = String(process.env.GREEN_API_TOKEN_INSTANCE || '').trim();
+const WHAPI_ENV_TOKEN = String(process.env.WHAPI_API_TOKEN || '').trim();
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
@@ -1074,6 +1082,17 @@ function saveDatabaseToDisk(mutation?: ServerMutationEvent, immediate: boolean =
   scheduleDiskFlush(immediate);
 }
 
+// /api/db and SSE send the whole config to browsers, so API tokens must never be stored in it.
+function removeSecretsFromDatabase() {
+  const waConfig = memoryDb?.config?.whatsappConfig;
+  if (!waConfig) return;
+  const secretKeys = ['apiTokenInstance', 'whapiToken'].filter(k => waConfig[k] !== undefined);
+  if (secretKeys.length === 0) return;
+  for (const k of secretKeys) delete waConfig[k];
+  console.log(`🔐 Removed ${secretKeys.join(', ')} from the stored WhatsApp config; tokens are read from environment variables.`);
+  saveDatabaseToDisk({ type: 'update', updates: { 'config/whatsappConfig': waConfig } }, true);
+}
+
 function broadcastMutation(mutation: ServerMutationEvent) {
   const payload = JSON.stringify({
     ...mutation,
@@ -1322,8 +1341,24 @@ async function startServer() {
     next();
   });
 
+  const siteAuth = createSiteAuth({
+    sitePassword: String(process.env.SITE_PASSWORD || ''),
+    sessionSecret: String(process.env.SESSION_SECRET || ''),
+    ticketApiKey: TICKET_API_MASTER_KEY,
+    webhookSecret: WHATSAPP_WEBHOOK_SECRET,
+    isProduction: process.env.NODE_ENV === 'production'
+  });
+  if (!siteAuth.enabled) {
+    console.warn(process.env.NODE_ENV === 'production'
+      ? '🔒 SITE_PASSWORD is not set: every request except /api/health is refused until it is configured.'
+      : '🔓 SITE_PASSWORD is not set: login gate disabled for local development.');
+  }
+  app.use(siteAuth.gate);
+  siteAuth.registerRoutes(app);
+
   // 1. Load initial memory & local cache from SQLite
   loadDatabase();
+  removeSecretsFromDatabase();
 
   // --- API Routes ---
   app.get('/api/health', (req, res) => {
@@ -1970,17 +2005,11 @@ async function startServer() {
   }
 
   // Master key for Full Access operations (can be customized via env var)
-  const TICKET_API_MASTER_KEY = process.env.TICKET_API_KEY || 'tfw-full-access-key-2026';
-
-  // Helper to verify full access credentials or identify caller
+  // Helper to verify full access credentials or identify caller.
+  // fullAccess stays true because the site gate already rejected callers without a session or a valid key.
   function getTicketApiAccess(req: express.Request) {
-    const authHeader = req.headers.authorization;
-    const apiKeyHeader = req.headers['x-api-key'];
-    const queryKey = req.query.apiKey || req.query.key;
-    const rawKey = (apiKeyHeader ? String(apiKeyHeader) : '') ||
-      (authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : '') ||
-      (queryKey ? String(queryKey) : '');
-    const isMaster = Boolean(rawKey && (rawKey === TICKET_API_MASTER_KEY || rawKey === 'admin79' || rawKey === 'sales79'));
+    const rawKey = readApiKey(req);
+    const isMaster = Boolean(rawKey && TICKET_API_MASTER_KEY && safeEqual(rawKey, TICKET_API_MASTER_KEY));
     return {
       fullAccess: true,
       hasKey: Boolean(rawKey),
@@ -2022,7 +2051,7 @@ async function startServer() {
     version: '2.5.0',
     description: 'Comprehensive Full Access API for querying, recording, updating, voiding, reconciling, managing ticket counters, and exporting turnstile footfall.',
     masterAuthentication: {
-      header: 'x-api-key: tfw-full-access-key-2026 (or Bearer token / ?apiKey=...)',
+      header: 'x-api-key: <TICKET_API_KEY> (or Bearer token / ?apiKey=...); browser sessions need no key',
       note: 'All endpoints operate with full access enabled. Master key provides verified operator badge in audit trails.'
     },
     masterActionMethod: {
@@ -4529,10 +4558,7 @@ async function startServer() {
     }
   });
 
-  const GREEN_API_DEFAULT_ID_INSTANCE = '710522727617';
-  const GREEN_API_DEFAULT_TOKEN_INSTANCE = '8ef1451101d7484cbd2e35bbc21615f1c3b929591a9644e9a8';
   const WHAPI_DEFAULT_API_URL = process.env.WHAPI_API_URL || 'https://gate.whapi.cloud/';
-  const WHAPI_DEFAULT_TOKEN = process.env.WHAPI_API_TOKEN || 'CR4IqUgW0ni4wDo1J12eSwxUCnJbDIT5';
   const TFW_ISSUE_RESOLVE_GROUP_NAME = 'TFW Issue Resolve (Tech+ Guest Feedback)';
   const TFW_ISSUE_RESOLVE_GROUP_ID = '120363024724303859@g.us';
 
@@ -4540,8 +4566,8 @@ async function startServer() {
   async function sendViaGreenApiText(message: string, chatId: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const db = loadDatabase();
     const cfg = db.config?.whatsappConfig || {};
-    const idInstance = String(cfg.idInstance || process.env.GREEN_API_ID_INSTANCE || GREEN_API_DEFAULT_ID_INSTANCE).trim();
-    const apiTokenInstance = String(cfg.apiTokenInstance || process.env.GREEN_API_TOKEN_INSTANCE || GREEN_API_DEFAULT_TOKEN_INSTANCE).trim();
+    const idInstance = String(GREEN_API_ENV_ID_INSTANCE || cfg.idInstance || '').trim();
+    const apiTokenInstance = GREEN_API_ENV_TOKEN_INSTANCE;
 
     if (!idInstance || !apiTokenInstance) {
       return { success: false, error: 'Green-API credentials not configured.' };
@@ -4575,8 +4601,8 @@ async function startServer() {
   async function sendViaGreenApiMedia(mediaData: string, caption: string, chatId: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const db = loadDatabase();
     const cfg = db.config?.whatsappConfig || {};
-    const idInstance = String(cfg.idInstance || process.env.GREEN_API_ID_INSTANCE || GREEN_API_DEFAULT_ID_INSTANCE).trim();
-    const apiTokenInstance = String(cfg.apiTokenInstance || process.env.GREEN_API_TOKEN_INSTANCE || GREEN_API_DEFAULT_TOKEN_INSTANCE).trim();
+    const idInstance = String(GREEN_API_ENV_ID_INSTANCE || cfg.idInstance || '').trim();
+    const apiTokenInstance = GREEN_API_ENV_TOKEN_INSTANCE;
 
     if (!idInstance || !apiTokenInstance) {
       return { success: false, error: 'Green-API credentials not configured.' };
@@ -4657,7 +4683,7 @@ async function startServer() {
 
     // 2. Try Whapi.cloud fallback
     const apiUrl = String(cfg.whapiApiUrl || WHAPI_DEFAULT_API_URL).replace(/\/+$/, '');
-    const apiToken = String(cfg.whapiToken || WHAPI_DEFAULT_TOKEN).trim();
+    const apiToken = WHAPI_ENV_TOKEN;
     if (apiToken) {
       try {
         const res = await fetch(`${apiUrl}/messages/text`, {
@@ -4704,7 +4730,7 @@ async function startServer() {
 
     // 2. Try Whapi media fallback
     const apiUrl = String(cfg.whapiApiUrl || WHAPI_DEFAULT_API_URL).replace(/\/+$/, '');
-    const apiToken = String(cfg.whapiToken || WHAPI_DEFAULT_TOKEN).trim();
+    const apiToken = WHAPI_ENV_TOKEN;
     if (apiToken) {
       try {
         let mediaPayload = mediaData.trim();
@@ -4876,8 +4902,8 @@ async function startServer() {
     const cfg = db.config?.whatsappConfig || {};
     res.json({
       whapiApiUrl: cfg.whapiApiUrl || WHAPI_DEFAULT_API_URL,
-      hasToken: Boolean(cfg.whapiToken || WHAPI_DEFAULT_TOKEN),
-      idInstance: cfg.idInstance || process.env.GREEN_API_ID_INSTANCE || '',
+      hasToken: Boolean(WHAPI_ENV_TOKEN),
+      idInstance: GREEN_API_ENV_ID_INSTANCE || cfg.idInstance || '',
       groupChatId: cfg.groupChatId || cfg.detectedGroupChatId || TFW_ISSUE_RESOLVE_GROUP_ID,
       detectedGroupName: cfg.detectedGroupName || TFW_ISSUE_RESOLVE_GROUP_NAME,
       targetGroupName: cfg.targetGroupName || TFW_ISSUE_RESOLVE_GROUP_NAME,
@@ -4894,14 +4920,10 @@ async function startServer() {
     const db = loadDatabase();
     if (!db.config.whatsappConfig) db.config.whatsappConfig = {};
 
+    // Tokens are not stored here: this config is broadcast to every browser. Set WHAPI_API_TOKEN / GREEN_API_TOKEN_INSTANCE instead.
+    const tokenIgnored = [whapiToken, apiTokenInstance].some(t => t !== undefined && String(t).trim() !== '');
     if (whapiApiUrl !== undefined) db.config.whatsappConfig.whapiApiUrl = String(whapiApiUrl).trim();
-    if (whapiToken !== undefined && String(whapiToken).trim() !== '') {
-      db.config.whatsappConfig.whapiToken = String(whapiToken).trim();
-    }
     if (idInstance !== undefined) db.config.whatsappConfig.idInstance = String(idInstance).trim();
-    if (apiTokenInstance !== undefined && String(apiTokenInstance).trim() !== '') {
-      db.config.whatsappConfig.apiTokenInstance = String(apiTokenInstance).trim();
-    }
     if (groupChatId !== undefined) db.config.whatsappConfig.groupChatId = String(groupChatId).trim();
     if (targetGroupName !== undefined) db.config.whatsappConfig.targetGroupName = String(targetGroupName).trim();
     if (autoNotifyOnSolved !== undefined) db.config.whatsappConfig.autoNotifyOnSolved = Boolean(autoNotifyOnSolved);
@@ -4912,7 +4934,11 @@ async function startServer() {
       updates: { 'config/whatsappConfig': db.config.whatsappConfig }
     });
 
-    res.json({ success: true, config: db.config.whatsappConfig });
+    res.json({
+      success: true,
+      config: db.config.whatsappConfig,
+      ...(tokenIgnored ? { warning: 'API tokens are not saved here. Set them as server environment variables.' } : {})
+    });
   });
 
   // Outgoing message send endpoint (Direct chat to WhatsApp group)
@@ -5125,8 +5151,8 @@ async function startServer() {
     }
     const db = loadDatabase();
     const cfg = db.config?.whatsappConfig || {};
-    const idInstance = cfg.idInstance || process.env.GREEN_API_ID_INSTANCE || '710522727617';
-    const apiTokenInstance = cfg.apiTokenInstance || process.env.GREEN_API_TOKEN_INSTANCE || '8ef1451101d7484cbd2e35bbc21615f1c3b929591a9644e9a8';
+    const idInstance = GREEN_API_ENV_ID_INSTANCE || cfg.idInstance || '';
+    const apiTokenInstance = GREEN_API_ENV_TOKEN_INSTANCE;
 
     if (!idInstance || !apiTokenInstance) {
       return { success: false, newTickets: 0, error: 'Green API credentials missing' };
@@ -5588,8 +5614,8 @@ async function startServer() {
   async function configureGreenApiWebhook() {
     const db = loadDatabase();
     const cfg = db.config?.whatsappConfig || {};
-    const idInstance = cfg.idInstance || process.env.GREEN_API_ID_INSTANCE || '710522727617';
-    const apiTokenInstance = cfg.apiTokenInstance || process.env.GREEN_API_TOKEN_INSTANCE || '8ef1451101d7484cbd2e35bbc21615f1c3b929591a9644e9a8';
+    const idInstance = GREEN_API_ENV_ID_INSTANCE || cfg.idInstance || '';
+    const apiTokenInstance = GREEN_API_ENV_TOKEN_INSTANCE;
     if (!idInstance || !apiTokenInstance) return;
 
     const appUrl = process.env.APP_URL;
@@ -5601,7 +5627,7 @@ async function startServer() {
 
     try {
       if (isPublicDomain) {
-        const webhookUrl = `${appUrl.replace(/\/$/, '')}/api/webhooks/whatsapp`;
+        const webhookUrl = `${appUrl.replace(/\/$/, '')}/api/webhooks/whatsapp${WHATSAPP_WEBHOOK_SECRET ? `?secret=${encodeURIComponent(WHATSAPP_WEBHOOK_SECRET)}` : ''}`;
         const res = await fetch(`https://api.green-api.com/waInstance${idInstance}/setSettings/${apiTokenInstance}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

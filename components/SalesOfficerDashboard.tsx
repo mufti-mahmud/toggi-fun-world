@@ -1596,8 +1596,7 @@ export const SalesOfficerDashboard = ({
                         const res = await fetch('/api/ticket-sales/action', {
                           method: 'POST',
                           headers: { 
-                            'Content-Type': 'application/json',
-                            'x-api-key': 'tfw-full-access-key-2026'
+                            'Content-Type': 'application/json'
                           },
                           body: JSON.stringify(payload)
                         });
@@ -2055,7 +2054,7 @@ export const SalesOfficerDashboard = ({
 var options = new TfwTicketApiOptions
 {
     BaseUrl = "${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5000'}",
-    ApiKey = "tfw-full-access-key-2026",
+    ApiKey = "<TICKET_API_KEY>",
     DefaultSenderName = "Turnstile Gate #1 Controller"
 };
 
@@ -2094,7 +2093,7 @@ builder.Services.AddSingleton<ITfwTicketApiClient>(sp =>
     {
         BaseUrl = builder.Configuration["TfwTicketApi:BaseUrl"] 
                   ?? "${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5000'}",
-        ApiKey = "tfw-full-access-key-2026",
+        ApiKey = "<TICKET_API_KEY>",
         DefaultSenderName = ".NET Web Controller"
     });
 });

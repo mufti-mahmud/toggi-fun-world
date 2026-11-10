@@ -1,6 +1,6 @@
 {
-  "version": 21666,
-  "lastUpdated": "2026-11-06T08:24:16.318Z",
+  "version": 21667,
+  "lastUpdated": "2026-11-10T00:56:54.867Z",
   "config": {
     "deletedTicketSignatures": [],
     "appName": "Tanvir Bashundhara Group",
@@ -2212,7 +2212,6 @@
       "targetGroupName": "Technical support TFW",
       "detectedGroupName": "Technical support TFW",
       "detectedGroupChatId": "1203630283928192@g.us",
-      "apiTokenInstance": "8ef1451101d7484cbd2e35bbc21615f1c3b929591a9644e9a8",
       "lastMessage": "Level-11, Bumper Car- Platform Problem.",
       "lastSender": "Firoz.Toggy",
       "idInstance": "710522727617",
@@ -2394,7 +2393,10 @@
           "briefingTime": "3:48:40 PM"
         }
       },
-      "2026-09-16": {}
+      "2026-09-16": {},
+      "2026-11-05": {},
+      "2026-11-04": {},
+      "2026-11-03": {}
     },
     "operatorAssignments": {
       "2026-09-02": {
@@ -2808,7 +2810,10 @@
           301
         ]
       },
-      "2026-09-16": {}
+      "2026-09-16": {},
+      "2026-11-05": {},
+      "2026-11-04": {},
+      "2026-11-03": {}
     },
     "ticketSalesAssignments": {
       "2026-09-02": {},
@@ -2835,7 +2840,10 @@
       },
       "2026-09-14": {},
       "2026-09-15": {},
-      "2026-09-16": {}
+      "2026-09-16": {},
+      "2026-11-05": {},
+      "2026-11-04": {},
+      "2026-11-03": {}
     },
     "dailyCounts": {
       "2026-09-02": {},
@@ -4171,53 +4179,51 @@
         "161": 1,
         "162": 1,
         "163": 1,
-        "164": 0,
-        "165": 0,
-        "166": 0,
-        "167": 0,
-        "168": 0,
-        "169": 0,
-        "170": 0,
-        "171": 0,
-        "172": 0,
-        "173": 0,
-        "174": 0,
-        "175": 0,
-        "176": 0,
-        "177": 0,
-        "178": 0,
-        "179": 0,
-        "180": 0,
-        "181": 0,
-        "182": 0,
-        "183": 0,
-        "184": 0,
-        "185": 0,
-        "186": 0,
-        "187": 0,
-        "188": 0,
-        "189": 0,
-        "190": 0,
-        "191": 0,
-        "192": 0,
-        "193": 0,
-        "194": 0,
-        "195": 0,
-        "196": 0,
-        "197": 0,
-        "198": 0,
-        "199": 0,
-        "200": 0,
-        "201": 0,
-        "202": 0,
-        "203": 0,
-        "204": 0,
-        "205": 0,
-        "206": 0,
-        "207": 0,
-        "208": 0,
-        "209": 0,
-        "1793791906167": 0
+        "164": 1,
+        "165": 1,
+        "166": 1,
+        "167": 1,
+        "168": 1,
+        "169": 1,
+        "170": 1,
+        "171": 1,
+        "172": 1,
+        "173": 1,
+        "174": 1,
+        "175": 1,
+        "176": 1,
+        "177": 1,
+        "178": 1,
+        "179": 1,
+        "180": 1,
+        "181": 1,
+        "182": 1,
+        "183": 1,
+        "184": 1,
+        "185": 1,
+        "186": 1,
+        "187": 1,
+        "188": 1,
+        "189": 1,
+        "190": 1,
+        "191": 1,
+        "192": 1,
+        "193": 1,
+        "194": 1,
+        "195": 1,
+        "196": 1,
+        "197": 1,
+        "198": 1,
+        "199": 1,
+        "200": 1,
+        "201": 1,
+        "202": 1,
+        "203": 1,
+        "204": 1,
+        "205": 1,
+        "206": 1,
+        "207": 1,
+        "208": 1
       }
     },
     "dailyTicketCounts": {
@@ -4860,53 +4866,51 @@
         "161": 2,
         "162": 2,
         "163": 2,
-        "164": 2,
-        "165": 2,
-        "166": 2,
-        "167": 2,
-        "168": 2,
-        "169": 2,
-        "170": 2,
-        "171": 2,
-        "172": 2,
-        "173": 2,
-        "174": 2,
-        "175": 2,
-        "176": 2,
-        "177": 2,
-        "178": 2,
-        "179": 2,
-        "180": 2,
-        "181": 2,
-        "182": 2,
-        "183": 2,
-        "184": 2,
-        "185": 2,
-        "186": 2,
-        "187": 2,
-        "188": 2,
-        "189": 2,
-        "190": 2,
-        "191": 2,
-        "192": 2,
-        "193": 2,
-        "194": 2,
-        "195": 2,
-        "196": 2,
-        "197": 2,
-        "198": 2,
-        "199": 2,
-        "200": 2,
-        "201": 2,
-        "202": 2,
-        "203": 2,
-        "204": 2,
-        "205": 2,
-        "206": 2,
-        "207": 2,
-        "208": 2,
-        "209": 0,
-        "1793791906167": 0
+        "164": 1,
+        "165": 1,
+        "166": 1,
+        "167": 1,
+        "168": 1,
+        "169": 1,
+        "170": 1,
+        "171": 1,
+        "172": 1,
+        "173": 1,
+        "174": 1,
+        "175": 1,
+        "176": 1,
+        "177": 1,
+        "178": 1,
+        "179": 1,
+        "180": 1,
+        "181": 1,
+        "182": 1,
+        "183": 1,
+        "184": 1,
+        "185": 1,
+        "186": 1,
+        "187": 1,
+        "188": 1,
+        "189": 1,
+        "190": 1,
+        "191": 1,
+        "192": 1,
+        "193": 1,
+        "194": 1,
+        "195": 1,
+        "196": 1,
+        "197": 1,
+        "198": 1,
+        "199": 1,
+        "200": 1,
+        "201": 1,
+        "202": 1,
+        "203": 1,
+        "204": 1,
+        "205": 1,
+        "206": 1,
+        "207": 1,
+        "208": 1
       }
     },
     "ticketSalesData": {
@@ -4928,7 +4932,10 @@
       "2026-09-15": {},
       "2026-09-16": {
         "1": 25
-      }
+      },
+      "2026-11-05": {},
+      "2026-11-04": {},
+      "2026-11-03": {}
     },
     "packageSales": {
       "2026-09-02": {},
@@ -5050,31 +5057,34 @@
           "total": 0
         }
       },
-      "2026-09-16": {}
+      "2026-09-16": {},
+      "2026-11-05": {},
+      "2026-11-04": {},
+      "2026-11-03": {}
     },
     "maintenanceTickets": {
       "2026-11-05": {
-        "maint-20261105-01": {
-          "id": "maint-20261105-01",
+        "maint-20261105-03": {
+          "id": "maint-20261105-03",
           "date": "2026-11-05",
-          "rideId": 101,
-          "rideName": "Paintball",
-          "floor": "Level 17",
-          "problem": "Power contact brush sparking intermittently on Car #4",
+          "rideId": 103,
+          "rideName": "VR Tank",
+          "floor": "Level 16",
+          "problem": "Force feedback motor slipping under hard left steer",
           "status": "solved",
-          "priority": "high",
+          "priority": "normal",
           "source": "operator",
-          "reportedById": 101,
-          "reportedByName": "Shamim Hossain (Operator)",
+          "reportedById": 103,
+          "reportedByName": "Kamrul Hasan (Operator)",
           "reportedByRole": "Operator",
-          "reportedAt": "2026-11-05T14:15:00+06:00",
+          "reportedAt": "2026-11-05T17:20:00+06:00",
           "assignedToId": 201,
           "assignedToName": "Tariqul Islam",
           "assignedToPhone": "8801711223344",
-          "inProgressAt": "2026-11-05T14:25:00+06:00",
-          "solvedAt": "2026-11-05T15:10:00+06:00",
+          "inProgressAt": "2026-11-05T17:30:00+06:00",
+          "solvedAt": "2026-11-05T18:15:00+06:00",
           "solvedByRole": "Sr. Technician",
-          "resolutionNotes": "Power brush assembly replaced with genuine spare. Carbon contact cleaned and realigned. Tested 5 laps with full load OK.",
+          "resolutionNotes": "Drive belt tightened to spec (2.5Nm). Force feedback recalibrated in service menu. Test race run flawlessly.",
           "whatsappGroup": "TFW Issue Resolve (Tech+ Guest Feedback)",
           "targetDepartment": "both"
         },
@@ -5102,27 +5112,27 @@
           "whatsappGroup": "TFW Issue Resolve (Tech+ Guest Feedback)",
           "targetDepartment": "both"
         },
-        "maint-20261105-03": {
-          "id": "maint-20261105-03",
+        "maint-20261105-01": {
+          "id": "maint-20261105-01",
           "date": "2026-11-05",
-          "rideId": 103,
-          "rideName": "VR Tank",
-          "floor": "Level 16",
-          "problem": "Force feedback motor slipping under hard left steer",
+          "rideId": 101,
+          "rideName": "Paintball",
+          "floor": "Level 17",
+          "problem": "Power contact brush sparking intermittently on Car #4",
           "status": "solved",
-          "priority": "normal",
+          "priority": "high",
           "source": "operator",
-          "reportedById": 103,
-          "reportedByName": "Kamrul Hasan (Operator)",
+          "reportedById": 101,
+          "reportedByName": "Shamim Hossain (Operator)",
           "reportedByRole": "Operator",
-          "reportedAt": "2026-11-05T17:20:00+06:00",
+          "reportedAt": "2026-11-05T14:15:00+06:00",
           "assignedToId": 201,
           "assignedToName": "Tariqul Islam",
           "assignedToPhone": "8801711223344",
-          "inProgressAt": "2026-11-05T17:30:00+06:00",
-          "solvedAt": "2026-11-05T18:15:00+06:00",
+          "inProgressAt": "2026-11-05T14:25:00+06:00",
+          "solvedAt": "2026-11-05T15:10:00+06:00",
           "solvedByRole": "Sr. Technician",
-          "resolutionNotes": "Drive belt tightened to spec (2.5Nm). Force feedback recalibrated in service menu. Test race run flawlessly.",
+          "resolutionNotes": "Power brush assembly replaced with genuine spare. Carbon contact cleaned and realigned. Tested 5 laps with full load OK.",
           "whatsappGroup": "TFW Issue Resolve (Tech+ Guest Feedback)",
           "targetDepartment": "both"
         }
@@ -5247,318 +5257,108 @@
     },
     "historyLog": [],
     "whatsappManagementReports": {
-      "2026-09-16": {
-        "date": "2026-09-16",
-        "timestamp": "2026-09-16T20:45:00+06:00",
+      "2026-11-05": {
+        "date": "2026-11-05",
+        "timestamp": "2026-11-05T20:45:00+06:00",
         "groupName": "TFW Management Team",
         "senderName": "TFW Ops Management",
         "senderPhone": "8801700000000",
-        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 16/09/2026.\n\nBasement 01\nIndividual sales: 14,200/=\nKiddo pack ratio : 650/=\nXtreme pack ratio: 6,400/=\nTotal Revenue : 21,250/=\n\nLevel - 01\nIndividual sales: 16,800/=\nKiddo pack ratio : 800/=\nXtreme pack ratio: 7,500/=\nTotal Revenue : 25,100/=\n\nLevel 8\nIndividual sales: 18,400/=\nKiddo pack ratio : 900/=\nXtreme pack ratio: 8,200/=\nTotal Revenue : 27,500/=\n\nLevel 9\nIndividual sales: 31,500/=\nKiddo pack ratio : 2,300/=\nXtreme pack ratio: 14,000/=\nTotal Revenue : 47,800/=\n\nLevel 10\nIndividual sales: 22,650/=\nKiddo pack ratio : 1,100/=\nXtreme pack ratio: 10,500/=\nTotal Revenue : 34,250/=\n\nLevel 11\nIndividual sales: 25,800/=\nKiddo pack ratio : 1,400/=\nXtreme pack ratio: 11,200/=\nTotal Revenue : 38,400/=\n\nLevel 12\nIndividual sales: 21,300/=\nKiddo pack ratio : 1,000/=\nXtreme pack ratio: 9,400/=\nTotal Revenue : 31,700/=\n\nLevel 13\nIndividual sales: 19,500/=\nKiddo pack ratio : 850/=\nXtreme pack ratio: 8,900/=\nTotal Revenue : 29,250/=\n\nLevel 14\nIndividual sales: 24,100/=\nKiddo pack ratio : 1,250/=\nXtreme pack ratio: 10,800/=\nTotal Revenue : 36,150/=\n\nLevel 15\nIndividual sales: 27,400/=\nKiddo pack ratio : 1,500/=\nXtreme pack ratio: 12,100/=\nTotal Revenue : 41,000/=\n\nLevel 16\nIndividual sales: 18,200/=\nKiddo pack ratio : 750/=\nXtreme pack ratio: 7,800/=\nTotal Revenue : 26,750/=\n\nLevel 17\nIndividual sales: 15,900/=\nKiddo pack ratio : 600/=\nXtreme pack ratio: 6,500/=\nTotal Revenue : 23,000/=\n\nKiddo package sold: 132 pcs.\n Revenue : 145,200/=\n\nXtreme package sold: 80 pcs.\n Revenue : 280,500/=\n\nTotal Foot Fall: 1,850\n person. \nDiscount : 12,000/=\n\nTotal revenue (day End): 524,000/=",
+        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 05/11/2026.\n\n\nBasement 01, ( counter 01)Entry counter.  \nIndividual sales (entry): 1,350/=\nKiddo pack ratio : 1,100/=\nXtreme pack ratio : 00/=\nTotal Revenue : 2,450/=\n\nLevel -01, (Aarong 02 & Atrium 01). Entry counter.\nIndividual sales, (entry): 11,550/=\nKiddo pack ratio : 13,750/=\nXtreme pack ratio : 24,500/=\nTotal revenue : 49,800/=\n\nLevel -08(Entry counter 04)\nIndividual sales entry: 17,100/=\nKiddo pack ratio : 39,600/=\nXtreme pack ratio : 00/=\nTotal Revenue: 56,700/=\n\nLevel-09 ( counter 01) kids Zone \nIndividual sales: 5,650/=\nKiddo pack ratio : 2,200/=\nXtreme pack ratio : 00/=\nTotal Revenue: 7,850/=\n\nLevel 10, Kids & Adult play  zone.\nIndividual sales: 28,050/=\nKiddo pack ratio : 00/=\nXtreme pack ratio: 00/=\nTotal Revenue : 28,050/=\n\n\nLevel-11,  kids zone & Adult play zone.\nIndividual sales: 5,435/=\nKiddo pack ratio : 00/=\nXtreme pack ratio : 00/=\nTotal Revenue : 5,435/=\n\nLevel-12 (VR zone)\nIndividual sales: 6,200/=\nXtreme pack ratio : 00/=\nTotal  Revenue : 6,200/=\n\nLevel-13 (VR zone)\nIndividual sales: 18,895/=\nXtreme pack ratio: 00/=\nTotal Revenue : 18,895/=\n\nLevel-14  (Racing zone)\nIndividual sales: 2,850/=\nXtreme pack ratio: 00/=\nTotal Revenue : 2,850/=\n\nLevel-15 \nIndividual sales: 11,800/=\nXtreme pack ratio: 00/=.\nTotal  Revenue : 11,800/=\n\nLevel-16 (VR zone)\nIndividual sales: 3,840/=\nXtreme pack ratio: 00/=\nTotal Revenue : 3,840/=\n\nLevel-17 \nIndividual sales: 4,420/=\nXtreme pack ratio : 00/=\nTotal Revenue : 4,420/=\n\nKiddo package sold: 52 pcs.\n Revenue : 56,650/=\n\nXtreme package sold: 07 pcs.\n Revenue : 24,500/=\n\nTotal Foot Fall: 258\n person. \nDiscount : 810/=\n\nTotal revenue (day End): 198,290/=",
         "salesAndRevenue": {
-          "toggiKiddoSale": 145200,
-          "toggiXtremeSale": 280500,
-          "toggiVipConciergeSale": 45000,
-          "entryTicketSale": 65300,
-          "totalFootFall": 1850,
-          "discount": 12000,
-          "totalRevenue": 524000,
-          "kiddoPackageSold": 132,
-          "xtremePackageSold": 80
+          "toggiKiddoSale": 56650,
+          "toggiXtremeSale": 24500,
+          "toggiVipConciergeSale": 0,
+          "entryTicketSale": 0,
+          "totalFootFall": 258,
+          "discount": 810,
+          "totalRevenue": 198290,
+          "kiddoPackageSold": 52,
+          "xtremePackageSold": 7
         },
         "counterBreakdown": [
           {
             "counterName": "Basement 01",
-            "individualSales": 14200,
-            "kiddoPackRatio": 650,
-            "xtremePackRatio": 6400,
-            "totalRevenue": 21250
-          },
-          {
-            "counterName": "Level - 01",
-            "individualSales": 16800,
-            "kiddoPackRatio": 800,
-            "xtremePackRatio": 7500,
-            "totalRevenue": 25100
-          },
-          {
-            "counterName": "Level 8",
-            "individualSales": 18400,
-            "kiddoPackRatio": 900,
-            "xtremePackRatio": 8200,
-            "totalRevenue": 27500
-          },
-          {
-            "counterName": "Level 9",
-            "individualSales": 31500,
-            "kiddoPackRatio": 2300,
-            "xtremePackRatio": 14000,
-            "totalRevenue": 47800
-          },
-          {
-            "counterName": "Level 10",
-            "individualSales": 22650,
+            "individualSales": 1350,
             "kiddoPackRatio": 1100,
-            "xtremePackRatio": 10500,
-            "totalRevenue": 34250
-          },
-          {
-            "counterName": "Level 11",
-            "individualSales": 25800,
-            "kiddoPackRatio": 1400,
-            "xtremePackRatio": 11200,
-            "totalRevenue": 38400
-          },
-          {
-            "counterName": "Level 12",
-            "individualSales": 21300,
-            "kiddoPackRatio": 1000,
-            "xtremePackRatio": 9400,
-            "totalRevenue": 31700
-          },
-          {
-            "counterName": "Level 13",
-            "individualSales": 19500,
-            "kiddoPackRatio": 850,
-            "xtremePackRatio": 8900,
-            "totalRevenue": 29250
-          },
-          {
-            "counterName": "Level 14",
-            "individualSales": 24100,
-            "kiddoPackRatio": 1250,
-            "xtremePackRatio": 10800,
-            "totalRevenue": 36150
-          },
-          {
-            "counterName": "Level 15",
-            "individualSales": 27400,
-            "kiddoPackRatio": 1500,
-            "xtremePackRatio": 12100,
-            "totalRevenue": 41000
-          },
-          {
-            "counterName": "Level 16",
-            "individualSales": 18200,
-            "kiddoPackRatio": 750,
-            "xtremePackRatio": 7800,
-            "totalRevenue": 26750
-          },
-          {
-            "counterName": "Level 17",
-            "individualSales": 15900,
-            "kiddoPackRatio": 600,
-            "xtremePackRatio": 6500,
-            "totalRevenue": 23000
-          }
-        ]
-      },
-      "2026-09-15": {
-        "date": "2026-09-15",
-        "timestamp": "2026-09-15T20:48:00+06:00",
-        "groupName": "TFW Management Team",
-        "senderName": "TFW Ops Management",
-        "senderPhone": "8801700000000",
-        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 15/09/2026.\n\nBasement 01\nIndividual sales: 12,922/=\nKiddo pack ratio : 592/=\nXtreme pack ratio: 5,824/=\nTotal Revenue : 19,338/=\n\nLevel - 01\nIndividual sales: 15,288/=\nKiddo pack ratio : 728/=\nXtreme pack ratio: 6,825/=\nTotal Revenue : 22,841/=\n\nLevel 8\nIndividual sales: 16,744/=\nKiddo pack ratio : 819/=\nXtreme pack ratio: 7,462/=\nTotal Revenue : 25,025/=\n\nLevel 9\nIndividual sales: 28,665/=\nKiddo pack ratio : 2,093/=\nXtreme pack ratio: 12,740/=\nTotal Revenue : 43,498/=\n\nLevel 10\nIndividual sales: 20,612/=\nKiddo pack ratio : 1,001/=\nXtreme pack ratio: 9,555/=\nTotal Revenue : 31,168/=\n\nLevel 11\nIndividual sales: 23,478/=\nKiddo pack ratio : 1,274/=\nXtreme pack ratio: 10,192/=\nTotal Revenue : 34,944/=\n\nLevel 12\nIndividual sales: 19,383/=\nKiddo pack ratio : 910/=\nXtreme pack ratio: 8,554/=\nTotal Revenue : 28,847/=\n\nLevel 13\nIndividual sales: 17,745/=\nKiddo pack ratio : 774/=\nXtreme pack ratio: 8,099/=\nTotal Revenue : 26,618/=\n\nLevel 14\nIndividual sales: 21,931/=\nKiddo pack ratio : 1,138/=\nXtreme pack ratio: 9,828/=\nTotal Revenue : 32,897/=\n\nLevel 15\nIndividual sales: 24,934/=\nKiddo pack ratio : 1,365/=\nXtreme pack ratio: 11,011/=\nTotal Revenue : 37,310/=\n\nLevel 16\nIndividual sales: 16,562/=\nKiddo pack ratio : 683/=\nXtreme pack ratio: 7,098/=\nTotal Revenue : 24,343/=\n\nLevel 17\nIndividual sales: 14,469/=\nKiddo pack ratio : 546/=\nXtreme pack ratio: 5,915/=\nTotal Revenue : 20,930/=\n\nKiddo package sold: 120 pcs.\n Revenue : 132,000/=\n\nXtreme package sold: 70 pcs.\n Revenue : 245,000/=\n\nTotal Foot Fall: 1,640\n person. \nDiscount : 10,000/=\n\nTotal revenue (day End): 463,500/=",
-        "salesAndRevenue": {
-          "toggiKiddoSale": 132000,
-          "toggiXtremeSale": 245000,
-          "toggiVipConciergeSale": 38000,
-          "entryTicketSale": 58500,
-          "totalFootFall": 1640,
-          "discount": 10000,
-          "totalRevenue": 463500,
-          "kiddoPackageSold": 120,
-          "xtremePackageSold": 70
-        },
-        "counterBreakdown": [
-          {
-            "counterName": "Basement 01",
-            "individualSales": 12922,
-            "kiddoPackRatio": 592,
-            "xtremePackRatio": 5824,
-            "totalRevenue": 19338
+            "xtremePackRatio": 0,
+            "totalRevenue": 2450
           },
           {
             "counterName": "Level - 01",
-            "individualSales": 15288,
-            "kiddoPackRatio": 728,
-            "xtremePackRatio": 6825,
-            "totalRevenue": 22841
+            "individualSales": 11550,
+            "kiddoPackRatio": 13750,
+            "xtremePackRatio": 24500,
+            "totalRevenue": 49800
           },
           {
             "counterName": "Level 8",
-            "individualSales": 16744,
-            "kiddoPackRatio": 819,
-            "xtremePackRatio": 7462,
-            "totalRevenue": 25025
+            "individualSales": 17100,
+            "kiddoPackRatio": 39600,
+            "xtremePackRatio": 0,
+            "totalRevenue": 56700
           },
           {
             "counterName": "Level 9",
-            "individualSales": 28665,
-            "kiddoPackRatio": 2093,
-            "xtremePackRatio": 12740,
-            "totalRevenue": 43498
+            "individualSales": 5650,
+            "kiddoPackRatio": 2200,
+            "xtremePackRatio": 0,
+            "totalRevenue": 7850
           },
           {
             "counterName": "Level 10",
-            "individualSales": 20612,
-            "kiddoPackRatio": 1001,
-            "xtremePackRatio": 9555,
-            "totalRevenue": 31168
+            "individualSales": 28050,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 28050
           },
           {
             "counterName": "Level 11",
-            "individualSales": 23478,
-            "kiddoPackRatio": 1274,
-            "xtremePackRatio": 10192,
-            "totalRevenue": 34944
+            "individualSales": 5435,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 5435
           },
           {
             "counterName": "Level 12",
-            "individualSales": 19383,
-            "kiddoPackRatio": 910,
-            "xtremePackRatio": 8554,
-            "totalRevenue": 28847
+            "individualSales": 6200,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 6200
           },
           {
             "counterName": "Level 13",
-            "individualSales": 17745,
-            "kiddoPackRatio": 774,
-            "xtremePackRatio": 8099,
-            "totalRevenue": 26618
+            "individualSales": 18895,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 18895
           },
           {
             "counterName": "Level 14",
-            "individualSales": 21931,
-            "kiddoPackRatio": 1138,
-            "xtremePackRatio": 9828,
-            "totalRevenue": 32897
+            "individualSales": 2850,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 2850
           },
           {
             "counterName": "Level 15",
-            "individualSales": 24934,
-            "kiddoPackRatio": 1365,
-            "xtremePackRatio": 11011,
-            "totalRevenue": 37310
+            "individualSales": 11800,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 11800
           },
           {
             "counterName": "Level 16",
-            "individualSales": 16562,
-            "kiddoPackRatio": 683,
-            "xtremePackRatio": 7098,
-            "totalRevenue": 24343
+            "individualSales": 3840,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 3840
           },
           {
             "counterName": "Level 17",
-            "individualSales": 14469,
-            "kiddoPackRatio": 546,
-            "xtremePackRatio": 5915,
-            "totalRevenue": 20930
-          }
-        ]
-      },
-      "2026-09-14": {
-        "date": "2026-09-14",
-        "timestamp": "2026-09-14T20:52:00+06:00",
-        "groupName": "TFW Management Team",
-        "senderName": "TFW Ops Management",
-        "senderPhone": "8801700000000",
-        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 14/09/2026.\n\nBasement 01\nIndividual sales: 15,336/=\nKiddo pack ratio : 702/=\nXtreme pack ratio: 6,912/=\nTotal Revenue : 22,950/=\n\nLevel - 01\nIndividual sales: 18,144/=\nKiddo pack ratio : 864/=\nXtreme pack ratio: 8,100/=\nTotal Revenue : 27,108/=\n\nLevel 8\nIndividual sales: 19,872/=\nKiddo pack ratio : 972/=\nXtreme pack ratio: 8,856/=\nTotal Revenue : 29,700/=\n\nLevel 9\nIndividual sales: 34,020/=\nKiddo pack ratio : 2,484/=\nXtreme pack ratio: 15,120/=\nTotal Revenue : 51,624/=\n\nLevel 10\nIndividual sales: 24,462/=\nKiddo pack ratio : 1,188/=\nXtreme pack ratio: 11,340/=\nTotal Revenue : 36,990/=\n\nLevel 11\nIndividual sales: 27,864/=\nKiddo pack ratio : 1,512/=\nXtreme pack ratio: 12,096/=\nTotal Revenue : 41,472/=\n\nLevel 12\nIndividual sales: 23,004/=\nKiddo pack ratio : 1,080/=\nXtreme pack ratio: 10,152/=\nTotal Revenue : 34,236/=\n\nLevel 13\nIndividual sales: 21,060/=\nKiddo pack ratio : 918/=\nXtreme pack ratio: 9,612/=\nTotal Revenue : 31,590/=\n\nLevel 14\nIndividual sales: 26,028/=\nKiddo pack ratio : 1,350/=\nXtreme pack ratio: 11,664/=\nTotal Revenue : 39,042/=\n\nLevel 15\nIndividual sales: 29,592/=\nKiddo pack ratio : 1,620/=\nXtreme pack ratio: 13,068/=\nTotal Revenue : 44,280/=\n\nLevel 16\nIndividual sales: 19,656/=\nKiddo pack ratio : 810/=\nXtreme pack ratio: 8,424/=\nTotal Revenue : 28,890/=\n\nLevel 17\nIndividual sales: 17,172/=\nKiddo pack ratio : 648/=\nXtreme pack ratio: 7,020/=\nTotal Revenue : 24,840/=\n\nKiddo package sold: 143 pcs.\n Revenue : 158,000/=\n\nXtreme package sold: 85 pcs.\n Revenue : 298,000/=\n\nTotal Foot Fall: 1,980\n person. \nDiscount : 15,000/=\n\nTotal revenue (day End): 564,000/=",
-        "salesAndRevenue": {
-          "toggiKiddoSale": 158000,
-          "toggiXtremeSale": 298000,
-          "toggiVipConciergeSale": 52000,
-          "entryTicketSale": 71000,
-          "totalFootFall": 1980,
-          "discount": 15000,
-          "totalRevenue": 564000,
-          "kiddoPackageSold": 143,
-          "xtremePackageSold": 85
-        },
-        "counterBreakdown": [
-          {
-            "counterName": "Basement 01",
-            "individualSales": 15336,
-            "kiddoPackRatio": 702,
-            "xtremePackRatio": 6912,
-            "totalRevenue": 22950
-          },
-          {
-            "counterName": "Level - 01",
-            "individualSales": 18144,
-            "kiddoPackRatio": 864,
-            "xtremePackRatio": 8100,
-            "totalRevenue": 27108
-          },
-          {
-            "counterName": "Level 8",
-            "individualSales": 19872,
-            "kiddoPackRatio": 972,
-            "xtremePackRatio": 8856,
-            "totalRevenue": 29700
-          },
-          {
-            "counterName": "Level 9",
-            "individualSales": 34020,
-            "kiddoPackRatio": 2484,
-            "xtremePackRatio": 15120,
-            "totalRevenue": 51624
-          },
-          {
-            "counterName": "Level 10",
-            "individualSales": 24462,
-            "kiddoPackRatio": 1188,
-            "xtremePackRatio": 11340,
-            "totalRevenue": 36990
-          },
-          {
-            "counterName": "Level 11",
-            "individualSales": 27864,
-            "kiddoPackRatio": 1512,
-            "xtremePackRatio": 12096,
-            "totalRevenue": 41472
-          },
-          {
-            "counterName": "Level 12",
-            "individualSales": 23004,
-            "kiddoPackRatio": 1080,
-            "xtremePackRatio": 10152,
-            "totalRevenue": 34236
-          },
-          {
-            "counterName": "Level 13",
-            "individualSales": 21060,
-            "kiddoPackRatio": 918,
-            "xtremePackRatio": 9612,
-            "totalRevenue": 31590
-          },
-          {
-            "counterName": "Level 14",
-            "individualSales": 26028,
-            "kiddoPackRatio": 1350,
-            "xtremePackRatio": 11664,
-            "totalRevenue": 39042
-          },
-          {
-            "counterName": "Level 15",
-            "individualSales": 29592,
-            "kiddoPackRatio": 1620,
-            "xtremePackRatio": 13068,
-            "totalRevenue": 44280
-          },
-          {
-            "counterName": "Level 16",
-            "individualSales": 19656,
-            "kiddoPackRatio": 810,
-            "xtremePackRatio": 8424,
-            "totalRevenue": 28890
-          },
-          {
-            "counterName": "Level 17",
-            "individualSales": 17172,
-            "kiddoPackRatio": 648,
-            "xtremePackRatio": 7020,
-            "totalRevenue": 24840
+            "individualSales": 4420,
+            "kiddoPackRatio": 0,
+            "xtremePackRatio": 0,
+            "totalRevenue": 4420
           }
         ]
       },
@@ -6297,6 +6097,321 @@
           }
         ]
       },
+      "2026-09-16": {
+        "date": "2026-09-16",
+        "timestamp": "2026-09-16T20:45:00+06:00",
+        "groupName": "TFW Management Team",
+        "senderName": "TFW Ops Management",
+        "senderPhone": "8801700000000",
+        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 16/09/2026.\n\nBasement 01\nIndividual sales: 14,200/=\nKiddo pack ratio : 650/=\nXtreme pack ratio: 6,400/=\nTotal Revenue : 21,250/=\n\nLevel - 01\nIndividual sales: 16,800/=\nKiddo pack ratio : 800/=\nXtreme pack ratio: 7,500/=\nTotal Revenue : 25,100/=\n\nLevel 8\nIndividual sales: 18,400/=\nKiddo pack ratio : 900/=\nXtreme pack ratio: 8,200/=\nTotal Revenue : 27,500/=\n\nLevel 9\nIndividual sales: 31,500/=\nKiddo pack ratio : 2,300/=\nXtreme pack ratio: 14,000/=\nTotal Revenue : 47,800/=\n\nLevel 10\nIndividual sales: 22,650/=\nKiddo pack ratio : 1,100/=\nXtreme pack ratio: 10,500/=\nTotal Revenue : 34,250/=\n\nLevel 11\nIndividual sales: 25,800/=\nKiddo pack ratio : 1,400/=\nXtreme pack ratio: 11,200/=\nTotal Revenue : 38,400/=\n\nLevel 12\nIndividual sales: 21,300/=\nKiddo pack ratio : 1,000/=\nXtreme pack ratio: 9,400/=\nTotal Revenue : 31,700/=\n\nLevel 13\nIndividual sales: 19,500/=\nKiddo pack ratio : 850/=\nXtreme pack ratio: 8,900/=\nTotal Revenue : 29,250/=\n\nLevel 14\nIndividual sales: 24,100/=\nKiddo pack ratio : 1,250/=\nXtreme pack ratio: 10,800/=\nTotal Revenue : 36,150/=\n\nLevel 15\nIndividual sales: 27,400/=\nKiddo pack ratio : 1,500/=\nXtreme pack ratio: 12,100/=\nTotal Revenue : 41,000/=\n\nLevel 16\nIndividual sales: 18,200/=\nKiddo pack ratio : 750/=\nXtreme pack ratio: 7,800/=\nTotal Revenue : 26,750/=\n\nLevel 17\nIndividual sales: 15,900/=\nKiddo pack ratio : 600/=\nXtreme pack ratio: 6,500/=\nTotal Revenue : 23,000/=\n\nKiddo package sold: 132 pcs.\n Revenue : 145,200/=\n\nXtreme package sold: 80 pcs.\n Revenue : 280,500/=\n\nTotal Foot Fall: 1,850\n person. \nDiscount : 12,000/=\n\nTotal revenue (day End): 524,000/=",
+        "salesAndRevenue": {
+          "toggiKiddoSale": 145200,
+          "toggiXtremeSale": 280500,
+          "toggiVipConciergeSale": 45000,
+          "entryTicketSale": 65300,
+          "totalFootFall": 1850,
+          "discount": 12000,
+          "totalRevenue": 524000,
+          "kiddoPackageSold": 132,
+          "xtremePackageSold": 80
+        },
+        "counterBreakdown": [
+          {
+            "counterName": "Basement 01",
+            "individualSales": 14200,
+            "kiddoPackRatio": 650,
+            "xtremePackRatio": 6400,
+            "totalRevenue": 21250
+          },
+          {
+            "counterName": "Level - 01",
+            "individualSales": 16800,
+            "kiddoPackRatio": 800,
+            "xtremePackRatio": 7500,
+            "totalRevenue": 25100
+          },
+          {
+            "counterName": "Level 8",
+            "individualSales": 18400,
+            "kiddoPackRatio": 900,
+            "xtremePackRatio": 8200,
+            "totalRevenue": 27500
+          },
+          {
+            "counterName": "Level 9",
+            "individualSales": 31500,
+            "kiddoPackRatio": 2300,
+            "xtremePackRatio": 14000,
+            "totalRevenue": 47800
+          },
+          {
+            "counterName": "Level 10",
+            "individualSales": 22650,
+            "kiddoPackRatio": 1100,
+            "xtremePackRatio": 10500,
+            "totalRevenue": 34250
+          },
+          {
+            "counterName": "Level 11",
+            "individualSales": 25800,
+            "kiddoPackRatio": 1400,
+            "xtremePackRatio": 11200,
+            "totalRevenue": 38400
+          },
+          {
+            "counterName": "Level 12",
+            "individualSales": 21300,
+            "kiddoPackRatio": 1000,
+            "xtremePackRatio": 9400,
+            "totalRevenue": 31700
+          },
+          {
+            "counterName": "Level 13",
+            "individualSales": 19500,
+            "kiddoPackRatio": 850,
+            "xtremePackRatio": 8900,
+            "totalRevenue": 29250
+          },
+          {
+            "counterName": "Level 14",
+            "individualSales": 24100,
+            "kiddoPackRatio": 1250,
+            "xtremePackRatio": 10800,
+            "totalRevenue": 36150
+          },
+          {
+            "counterName": "Level 15",
+            "individualSales": 27400,
+            "kiddoPackRatio": 1500,
+            "xtremePackRatio": 12100,
+            "totalRevenue": 41000
+          },
+          {
+            "counterName": "Level 16",
+            "individualSales": 18200,
+            "kiddoPackRatio": 750,
+            "xtremePackRatio": 7800,
+            "totalRevenue": 26750
+          },
+          {
+            "counterName": "Level 17",
+            "individualSales": 15900,
+            "kiddoPackRatio": 600,
+            "xtremePackRatio": 6500,
+            "totalRevenue": 23000
+          }
+        ]
+      },
+      "2026-09-15": {
+        "date": "2026-09-15",
+        "timestamp": "2026-09-15T20:48:00+06:00",
+        "groupName": "TFW Management Team",
+        "senderName": "TFW Ops Management",
+        "senderPhone": "8801700000000",
+        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 15/09/2026.\n\nBasement 01\nIndividual sales: 12,922/=\nKiddo pack ratio : 592/=\nXtreme pack ratio: 5,824/=\nTotal Revenue : 19,338/=\n\nLevel - 01\nIndividual sales: 15,288/=\nKiddo pack ratio : 728/=\nXtreme pack ratio: 6,825/=\nTotal Revenue : 22,841/=\n\nLevel 8\nIndividual sales: 16,744/=\nKiddo pack ratio : 819/=\nXtreme pack ratio: 7,462/=\nTotal Revenue : 25,025/=\n\nLevel 9\nIndividual sales: 28,665/=\nKiddo pack ratio : 2,093/=\nXtreme pack ratio: 12,740/=\nTotal Revenue : 43,498/=\n\nLevel 10\nIndividual sales: 20,612/=\nKiddo pack ratio : 1,001/=\nXtreme pack ratio: 9,555/=\nTotal Revenue : 31,168/=\n\nLevel 11\nIndividual sales: 23,478/=\nKiddo pack ratio : 1,274/=\nXtreme pack ratio: 10,192/=\nTotal Revenue : 34,944/=\n\nLevel 12\nIndividual sales: 19,383/=\nKiddo pack ratio : 910/=\nXtreme pack ratio: 8,554/=\nTotal Revenue : 28,847/=\n\nLevel 13\nIndividual sales: 17,745/=\nKiddo pack ratio : 774/=\nXtreme pack ratio: 8,099/=\nTotal Revenue : 26,618/=\n\nLevel 14\nIndividual sales: 21,931/=\nKiddo pack ratio : 1,138/=\nXtreme pack ratio: 9,828/=\nTotal Revenue : 32,897/=\n\nLevel 15\nIndividual sales: 24,934/=\nKiddo pack ratio : 1,365/=\nXtreme pack ratio: 11,011/=\nTotal Revenue : 37,310/=\n\nLevel 16\nIndividual sales: 16,562/=\nKiddo pack ratio : 683/=\nXtreme pack ratio: 7,098/=\nTotal Revenue : 24,343/=\n\nLevel 17\nIndividual sales: 14,469/=\nKiddo pack ratio : 546/=\nXtreme pack ratio: 5,915/=\nTotal Revenue : 20,930/=\n\nKiddo package sold: 120 pcs.\n Revenue : 132,000/=\n\nXtreme package sold: 70 pcs.\n Revenue : 245,000/=\n\nTotal Foot Fall: 1,640\n person. \nDiscount : 10,000/=\n\nTotal revenue (day End): 463,500/=",
+        "salesAndRevenue": {
+          "toggiKiddoSale": 132000,
+          "toggiXtremeSale": 245000,
+          "toggiVipConciergeSale": 38000,
+          "entryTicketSale": 58500,
+          "totalFootFall": 1640,
+          "discount": 10000,
+          "totalRevenue": 463500,
+          "kiddoPackageSold": 120,
+          "xtremePackageSold": 70
+        },
+        "counterBreakdown": [
+          {
+            "counterName": "Basement 01",
+            "individualSales": 12922,
+            "kiddoPackRatio": 592,
+            "xtremePackRatio": 5824,
+            "totalRevenue": 19338
+          },
+          {
+            "counterName": "Level - 01",
+            "individualSales": 15288,
+            "kiddoPackRatio": 728,
+            "xtremePackRatio": 6825,
+            "totalRevenue": 22841
+          },
+          {
+            "counterName": "Level 8",
+            "individualSales": 16744,
+            "kiddoPackRatio": 819,
+            "xtremePackRatio": 7462,
+            "totalRevenue": 25025
+          },
+          {
+            "counterName": "Level 9",
+            "individualSales": 28665,
+            "kiddoPackRatio": 2093,
+            "xtremePackRatio": 12740,
+            "totalRevenue": 43498
+          },
+          {
+            "counterName": "Level 10",
+            "individualSales": 20612,
+            "kiddoPackRatio": 1001,
+            "xtremePackRatio": 9555,
+            "totalRevenue": 31168
+          },
+          {
+            "counterName": "Level 11",
+            "individualSales": 23478,
+            "kiddoPackRatio": 1274,
+            "xtremePackRatio": 10192,
+            "totalRevenue": 34944
+          },
+          {
+            "counterName": "Level 12",
+            "individualSales": 19383,
+            "kiddoPackRatio": 910,
+            "xtremePackRatio": 8554,
+            "totalRevenue": 28847
+          },
+          {
+            "counterName": "Level 13",
+            "individualSales": 17745,
+            "kiddoPackRatio": 774,
+            "xtremePackRatio": 8099,
+            "totalRevenue": 26618
+          },
+          {
+            "counterName": "Level 14",
+            "individualSales": 21931,
+            "kiddoPackRatio": 1138,
+            "xtremePackRatio": 9828,
+            "totalRevenue": 32897
+          },
+          {
+            "counterName": "Level 15",
+            "individualSales": 24934,
+            "kiddoPackRatio": 1365,
+            "xtremePackRatio": 11011,
+            "totalRevenue": 37310
+          },
+          {
+            "counterName": "Level 16",
+            "individualSales": 16562,
+            "kiddoPackRatio": 683,
+            "xtremePackRatio": 7098,
+            "totalRevenue": 24343
+          },
+          {
+            "counterName": "Level 17",
+            "individualSales": 14469,
+            "kiddoPackRatio": 546,
+            "xtremePackRatio": 5915,
+            "totalRevenue": 20930
+          }
+        ]
+      },
+      "2026-09-14": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T20:52:00+06:00",
+        "groupName": "TFW Management Team",
+        "senderName": "TFW Ops Management",
+        "senderPhone": "8801700000000",
+        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 14/09/2026.\n\nBasement 01\nIndividual sales: 15,336/=\nKiddo pack ratio : 702/=\nXtreme pack ratio: 6,912/=\nTotal Revenue : 22,950/=\n\nLevel - 01\nIndividual sales: 18,144/=\nKiddo pack ratio : 864/=\nXtreme pack ratio: 8,100/=\nTotal Revenue : 27,108/=\n\nLevel 8\nIndividual sales: 19,872/=\nKiddo pack ratio : 972/=\nXtreme pack ratio: 8,856/=\nTotal Revenue : 29,700/=\n\nLevel 9\nIndividual sales: 34,020/=\nKiddo pack ratio : 2,484/=\nXtreme pack ratio: 15,120/=\nTotal Revenue : 51,624/=\n\nLevel 10\nIndividual sales: 24,462/=\nKiddo pack ratio : 1,188/=\nXtreme pack ratio: 11,340/=\nTotal Revenue : 36,990/=\n\nLevel 11\nIndividual sales: 27,864/=\nKiddo pack ratio : 1,512/=\nXtreme pack ratio: 12,096/=\nTotal Revenue : 41,472/=\n\nLevel 12\nIndividual sales: 23,004/=\nKiddo pack ratio : 1,080/=\nXtreme pack ratio: 10,152/=\nTotal Revenue : 34,236/=\n\nLevel 13\nIndividual sales: 21,060/=\nKiddo pack ratio : 918/=\nXtreme pack ratio: 9,612/=\nTotal Revenue : 31,590/=\n\nLevel 14\nIndividual sales: 26,028/=\nKiddo pack ratio : 1,350/=\nXtreme pack ratio: 11,664/=\nTotal Revenue : 39,042/=\n\nLevel 15\nIndividual sales: 29,592/=\nKiddo pack ratio : 1,620/=\nXtreme pack ratio: 13,068/=\nTotal Revenue : 44,280/=\n\nLevel 16\nIndividual sales: 19,656/=\nKiddo pack ratio : 810/=\nXtreme pack ratio: 8,424/=\nTotal Revenue : 28,890/=\n\nLevel 17\nIndividual sales: 17,172/=\nKiddo pack ratio : 648/=\nXtreme pack ratio: 7,020/=\nTotal Revenue : 24,840/=\n\nKiddo package sold: 143 pcs.\n Revenue : 158,000/=\n\nXtreme package sold: 85 pcs.\n Revenue : 298,000/=\n\nTotal Foot Fall: 1,980\n person. \nDiscount : 15,000/=\n\nTotal revenue (day End): 564,000/=",
+        "salesAndRevenue": {
+          "toggiKiddoSale": 158000,
+          "toggiXtremeSale": 298000,
+          "toggiVipConciergeSale": 52000,
+          "entryTicketSale": 71000,
+          "totalFootFall": 1980,
+          "discount": 15000,
+          "totalRevenue": 564000,
+          "kiddoPackageSold": 143,
+          "xtremePackageSold": 85
+        },
+        "counterBreakdown": [
+          {
+            "counterName": "Basement 01",
+            "individualSales": 15336,
+            "kiddoPackRatio": 702,
+            "xtremePackRatio": 6912,
+            "totalRevenue": 22950
+          },
+          {
+            "counterName": "Level - 01",
+            "individualSales": 18144,
+            "kiddoPackRatio": 864,
+            "xtremePackRatio": 8100,
+            "totalRevenue": 27108
+          },
+          {
+            "counterName": "Level 8",
+            "individualSales": 19872,
+            "kiddoPackRatio": 972,
+            "xtremePackRatio": 8856,
+            "totalRevenue": 29700
+          },
+          {
+            "counterName": "Level 9",
+            "individualSales": 34020,
+            "kiddoPackRatio": 2484,
+            "xtremePackRatio": 15120,
+            "totalRevenue": 51624
+          },
+          {
+            "counterName": "Level 10",
+            "individualSales": 24462,
+            "kiddoPackRatio": 1188,
+            "xtremePackRatio": 11340,
+            "totalRevenue": 36990
+          },
+          {
+            "counterName": "Level 11",
+            "individualSales": 27864,
+            "kiddoPackRatio": 1512,
+            "xtremePackRatio": 12096,
+            "totalRevenue": 41472
+          },
+          {
+            "counterName": "Level 12",
+            "individualSales": 23004,
+            "kiddoPackRatio": 1080,
+            "xtremePackRatio": 10152,
+            "totalRevenue": 34236
+          },
+          {
+            "counterName": "Level 13",
+            "individualSales": 21060,
+            "kiddoPackRatio": 918,
+            "xtremePackRatio": 9612,
+            "totalRevenue": 31590
+          },
+          {
+            "counterName": "Level 14",
+            "individualSales": 26028,
+            "kiddoPackRatio": 1350,
+            "xtremePackRatio": 11664,
+            "totalRevenue": 39042
+          },
+          {
+            "counterName": "Level 15",
+            "individualSales": 29592,
+            "kiddoPackRatio": 1620,
+            "xtremePackRatio": 13068,
+            "totalRevenue": 44280
+          },
+          {
+            "counterName": "Level 16",
+            "individualSales": 19656,
+            "kiddoPackRatio": 810,
+            "xtremePackRatio": 8424,
+            "totalRevenue": 28890
+          },
+          {
+            "counterName": "Level 17",
+            "individualSales": 17172,
+            "kiddoPackRatio": 648,
+            "xtremePackRatio": 7020,
+            "totalRevenue": 24840
+          }
+        ]
+      },
       "2026-09-13": {
         "date": "2026-09-13",
         "timestamp": "2026-09-13T20:46:00+06:00",
@@ -6612,108 +6727,108 @@
           }
         ]
       },
-      "2026-11-05": {
-        "date": "2026-11-05",
-        "timestamp": "2026-11-05T20:45:00+06:00",
+      "2026-11-06": {
+        "date": "2026-11-06",
+        "timestamp": "2026-11-06T20:52:00+06:00",
         "groupName": "TFW Management Team",
         "senderName": "TFW Ops Management",
         "senderPhone": "8801700000000",
-        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 05/11/2026.\n\n\nBasement 01, ( counter 01)Entry counter.  \nIndividual sales (entry): 1,350/=\nKiddo pack ratio : 1,100/=\nXtreme pack ratio : 00/=\nTotal Revenue : 2,450/=\n\nLevel -01, (Aarong 02 & Atrium 01). Entry counter.\nIndividual sales, (entry): 11,550/=\nKiddo pack ratio : 13,750/=\nXtreme pack ratio : 24,500/=\nTotal revenue : 49,800/=\n\nLevel -08(Entry counter 04)\nIndividual sales entry: 17,100/=\nKiddo pack ratio : 39,600/=\nXtreme pack ratio : 00/=\nTotal Revenue: 56,700/=\n\nLevel-09 ( counter 01) kids Zone \nIndividual sales: 5,650/=\nKiddo pack ratio : 2,200/=\nXtreme pack ratio : 00/=\nTotal Revenue: 7,850/=\n\nLevel 10, Kids & Adult play  zone.\nIndividual sales: 28,050/=\nKiddo pack ratio : 00/=\nXtreme pack ratio: 00/=\nTotal Revenue : 28,050/=\n\n\nLevel-11,  kids zone & Adult play zone.\nIndividual sales: 5,435/=\nKiddo pack ratio : 00/=\nXtreme pack ratio : 00/=\nTotal Revenue : 5,435/=\n\nLevel-12 (VR zone)\nIndividual sales: 6,200/=\nXtreme pack ratio : 00/=\nTotal  Revenue : 6,200/=\n\nLevel-13 (VR zone)\nIndividual sales: 18,895/=\nXtreme pack ratio: 00/=\nTotal Revenue : 18,895/=\n\nLevel-14  (Racing zone)\nIndividual sales: 2,850/=\nXtreme pack ratio: 00/=\nTotal Revenue : 2,850/=\n\nLevel-15 \nIndividual sales: 11,800/=\nXtreme pack ratio: 00/=.\nTotal  Revenue : 11,800/=\n\nLevel-16 (VR zone)\nIndividual sales: 3,840/=\nXtreme pack ratio: 00/=\nTotal Revenue : 3,840/=\n\nLevel-17 \nIndividual sales: 4,420/=\nXtreme pack ratio : 00/=\nTotal Revenue : 4,420/=\n\nKiddo package sold: 52 pcs.\n Revenue : 56,650/=\n\nXtreme package sold: 07 pcs.\n Revenue : 24,500/=\n\nTotal Foot Fall: 258\n person. \nDiscount : 810/=\n\nTotal revenue (day End): 198,290/=",
+        "rawMessage": "Sir, TFW Total Cash Collection.\nDate: 06/11/2026.\n\n\nBasement 01, ( counter 01)Entry counter.  \nIndividual sales (entry): 1,800/=\nKiddo pack ratio : 1,100/=\nXtreme pack ratio : 00/=\nTotal Revenue : 2,900/=\n\nLevel -01, (Aarong 02 & Atrium 01). Entry counter.\nIndividual sales, (entry): 12,900/=\nKiddo pack ratio : 14,850/=\nXtreme pack ratio : 24,500/=\nTotal revenue : 52,250/=\n\nLevel -08(Entry counter 04)\nIndividual sales entry: 18,450/=\nKiddo pack ratio : 42,900/=\nXtreme pack ratio : 00/=\nTotal Revenue: 61,350/=\n\nLevel-09 ( counter 01) kids Zone \nIndividual sales: 6,250/=\nKiddo pack ratio : 3,300/=\nXtreme pack ratio : 00/=\nTotal Revenue: 9,550/=\n\nLevel 10, Kids & Adult play  zone.\nIndividual sales: 30,650/=\nKiddo pack ratio : 00/=\nXtreme pack ratio: 00/=\nTotal Revenue : 30,650/=\n\nLevel-11,  kids zone & Adult play zone.\nIndividual sales: 5,980/=\nKiddo pack ratio : 00/=\nXtreme pack ratio : 00/=\nTotal Revenue : 5,980/=\n\nLevel-12 (VR zone)\nIndividual sales: 6,800/=\nXtreme pack ratio : 00/=\nTotal  Revenue : 6,800/=\n\nLevel-13 (VR zone)\nIndividual sales: 20,450/=\nXtreme pack ratio: 00/=\nTotal Revenue : 20,450/=\n\nLevel-14  (Racing zone)\nIndividual sales: 3,200/=\nXtreme pack ratio: 00/=\nTotal Revenue : 3,200/=\n\nLevel-15 \nIndividual sales: 12,650/=\nXtreme pack ratio: 00/=.\nTotal  Revenue : 12,650/=\n\nLevel-16 (VR zone)\nIndividual sales: 4,120/=\nXtreme pack ratio: 00/=\nTotal Revenue : 4,120/=\n\nLevel-17 \nIndividual sales: 4,800/=\nXtreme pack ratio : 00/=\nTotal Revenue : 4,800/=\n\nKiddo package sold: 56 pcs.\n Revenue : 62,150/=\n\nXtreme package sold: 07 pcs.\n Revenue : 24,500/=\n\nTotal Foot Fall: 279\n person. \nDiscount : 900/=\n\nTotal revenue (day End): 214,700/=",
         "salesAndRevenue": {
-          "toggiKiddoSale": 56650,
+          "toggiKiddoSale": 62150,
           "toggiXtremeSale": 24500,
           "toggiVipConciergeSale": 0,
-          "entryTicketSale": 0,
-          "totalFootFall": 258,
-          "discount": 810,
-          "totalRevenue": 198290,
-          "kiddoPackageSold": 52,
+          "entryTicketSale": 128950,
+          "totalFootFall": 279,
+          "discount": 900,
+          "totalRevenue": 214700,
+          "kiddoPackageSold": 56,
           "xtremePackageSold": 7
         },
         "counterBreakdown": [
           {
             "counterName": "Basement 01",
-            "individualSales": 1350,
+            "individualSales": 1800,
             "kiddoPackRatio": 1100,
             "xtremePackRatio": 0,
-            "totalRevenue": 2450
+            "totalRevenue": 2900
           },
           {
             "counterName": "Level - 01",
-            "individualSales": 11550,
-            "kiddoPackRatio": 13750,
+            "individualSales": 12900,
+            "kiddoPackRatio": 14850,
             "xtremePackRatio": 24500,
-            "totalRevenue": 49800
+            "totalRevenue": 52250
           },
           {
             "counterName": "Level 8",
-            "individualSales": 17100,
-            "kiddoPackRatio": 39600,
+            "individualSales": 18450,
+            "kiddoPackRatio": 42900,
             "xtremePackRatio": 0,
-            "totalRevenue": 56700
+            "totalRevenue": 61350
           },
           {
             "counterName": "Level 9",
-            "individualSales": 5650,
-            "kiddoPackRatio": 2200,
+            "individualSales": 6250,
+            "kiddoPackRatio": 3300,
             "xtremePackRatio": 0,
-            "totalRevenue": 7850
+            "totalRevenue": 9550
           },
           {
             "counterName": "Level 10",
-            "individualSales": 28050,
+            "individualSales": 30650,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 28050
+            "totalRevenue": 30650
           },
           {
             "counterName": "Level 11",
-            "individualSales": 5435,
+            "individualSales": 5980,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 5435
+            "totalRevenue": 5980
           },
           {
             "counterName": "Level 12",
-            "individualSales": 6200,
+            "individualSales": 6800,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 6200
+            "totalRevenue": 6800
           },
           {
             "counterName": "Level 13",
-            "individualSales": 18895,
+            "individualSales": 20450,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 18895
+            "totalRevenue": 20450
           },
           {
             "counterName": "Level 14",
-            "individualSales": 2850,
+            "individualSales": 3200,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 2850
+            "totalRevenue": 3200
           },
           {
             "counterName": "Level 15",
-            "individualSales": 11800,
+            "individualSales": 12650,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 11800
+            "totalRevenue": 12650
           },
           {
             "counterName": "Level 16",
-            "individualSales": 3840,
+            "individualSales": 4120,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 3840
+            "totalRevenue": 4120
           },
           {
             "counterName": "Level 17",
-            "individualSales": 4420,
+            "individualSales": 4800,
             "kiddoPackRatio": 0,
             "xtremePackRatio": 0,
-            "totalRevenue": 4420
+            "totalRevenue": 4800
           }
         ]
       }
