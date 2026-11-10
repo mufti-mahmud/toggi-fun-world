@@ -20,7 +20,7 @@ import {
 import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite } from './sqliteDb';
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
 import { isManagementSalesMessage, parseManagementReportText, getSeedManagementReports } from './utils/whatsappManagementParser';
-import { createSiteAuth, readApiKey, safeEqual } from './siteAuth';
+import { createSiteAuth, readApiKey, safeEqual, clientIp, createAttemptLimiter } from './siteAuth';
 
 // Ensure production mode if running from compiled server.cjs bundle
 if (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) {
@@ -5910,29 +5910,115 @@ async function startServer() {
     res.json({ success: true, message: `Next 3-Month interval initialized from ${newCycleStartDate} to ${newCycleEndDate}.` });
   });
 
-  // Export full database
-  app.get('/api/db/export', (req, res) => {
-    const db = loadDatabase();
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=TFW_DB_Export_${new Date().toISOString().split('T')[0]}.json`);
-    res.send(JSON.stringify(db, null, 2));
+  // Backup and restore need BACKUP_PASSWORD, which only lives on the server. The admin role password
+  // cannot guard them because /api/db sends appConfig (including that password) to every browser.
+  const BACKUP_PASSWORD = String(process.env.BACKUP_PASSWORD || '');
+  const backupAttempts = createAttemptLimiter(5, 10 * 60 * 1000);
+  const RESTORE_POINTS_DIR = path.join(DATA_DIR, 'restore-points');
+  const RESTORE_POINTS_KEPT = 5;
+
+  // Not 401: the browser treats 401 as an expired site login and redirects to /login.
+  function checkBackupPassword(req: express.Request, res: express.Response): boolean {
+    if (!BACKUP_PASSWORD) {
+      res.status(503).json({ error: 'backup_not_configured', message: 'Backup is not set up yet. Set BACKUP_PASSWORD on the server.' });
+      return false;
+    }
+    const ip = clientIp(req);
+    const waitMs = backupAttempts.blockedForMs(ip);
+    if (waitMs > 0) {
+      res.setHeader('Retry-After', String(Math.ceil(waitMs / 1000)));
+      res.status(429).json({ error: 'too_many_attempts', message: `Too many wrong passwords. Try again in ${Math.ceil(waitMs / 60000)} minutes.` });
+      return false;
+    }
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!password || !safeEqual(password, BACKUP_PASSWORD)) {
+      backupAttempts.fail(ip);
+      res.status(403).json({ error: 'wrong_backup_password', message: 'Wrong backup password.' });
+      return false;
+    }
+    backupAttempts.reset(ip);
+    return true;
+  }
+
+  function buildBackupFile() {
+    const images: Record<string, string> = {};
+    if (fs.existsSync(RIDE_IMAGES_DIR)) {
+      for (const name of fs.readdirSync(RIDE_IMAGES_DIR)) {
+        const filePath = path.join(RIDE_IMAGES_DIR, name);
+        if (fs.statSync(filePath).isFile()) images[name] = fs.readFileSync(filePath).toString('base64');
+      }
+    }
+    return { format: 'tfw-backup', formatVersion: 1, createdAt: new Date().toISOString(), database: loadDatabase(), images };
+  }
+
+  function saveRestorePoint() {
+    fs.mkdirSync(RESTORE_POINTS_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(RESTORE_POINTS_DIR, `before-restore-${stamp}.json`), JSON.stringify(buildBackupFile()), 'utf-8');
+    const points = fs.readdirSync(RESTORE_POINTS_DIR).filter(f => f.startsWith('before-restore-')).sort();
+    for (const old of points.slice(0, Math.max(0, points.length - RESTORE_POINTS_KEPT))) {
+      fs.unlinkSync(path.join(RESTORE_POINTS_DIR, old));
+    }
+  }
+
+  app.post('/api/admin/backup', (req, res) => {
+    if (!checkBackupPassword(req, res)) return;
+    const backup = buildBackupFile();
+    const filename = `TFW_Backup_${getDhakaDateString()}.json`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    console.log(`💾 Backup downloaded (${Object.keys(backup.images).length} photos) by ${clientIp(req)}`);
+    res.json(backup);
   });
 
-  // Import / Restore full database
-  app.post('/api/db/import', (req, res) => {
-    const backup = req.body;
-    if (!backup || (!backup.config && !backup.data)) {
-      return res.status(400).json({ error: 'Invalid backup JSON format.' });
+  app.post('/api/admin/restore', (req, res) => {
+    if (!checkBackupPassword(req, res)) return;
+    const file = req.body?.backup;
+    const isFullBackup = file?.format === 'tfw-backup';
+    const db = isFullBackup ? file.database : file;
+    if (!db || typeof db !== 'object' || !db.config || typeof db.config !== 'object' || !db.data || typeof db.data !== 'object') {
+      return res.status(400).json({ error: 'invalid_backup', message: 'This file is not a Toggi Fun World backup.' });
     }
-    const initial = getInitialDatabase();
+
+    try {
+      saveRestorePoint();
+    } catch (e) {
+      console.error('Restore aborted: could not save restore point:', e);
+      return res.status(500).json({ error: 'safety_copy_failed', message: 'Could not save a safety copy of the current data, so nothing was restored.' });
+    }
+
+    const waConfig = db.config.whatsappConfig;
+    if (waConfig && typeof waConfig === 'object') {
+      delete waConfig.apiTokenInstance;
+      delete waConfig.whapiToken;
+    }
+    // Jump past every client's cached version so all devices take the restored data instead of their own copy.
     memoryDb = {
-      version: (memoryDb?.version || 1) + 1,
+      version: Math.max(Number(memoryDb?.version) || 0, Number(db.version) || 0) + 10,
       lastUpdated: new Date().toISOString(),
-      config: backup.config || initial.config,
-      data: backup.data || initial.data
+      config: db.config,
+      data: db.data
     };
-    saveDatabaseToDisk({ type: 'sync' });
-    res.json({ success: true, message: 'Database imported successfully.' });
+
+    let restoredPhotos = 0;
+    if (isFullBackup && file.images && typeof file.images === 'object') {
+      fs.mkdirSync(RIDE_IMAGES_DIR, { recursive: true });
+      for (const [name, base64] of Object.entries(file.images)) {
+        if (!/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith('.') || typeof base64 !== 'string') continue;
+        fs.writeFileSync(path.join(RIDE_IMAGES_DIR, name), Buffer.from(base64, 'base64'));
+        restoredPhotos++;
+      }
+    }
+
+    saveDatabaseToDisk({ type: 'sync' }, true);
+    console.log(`♻️ Database restored from backup (${restoredPhotos} photos) by ${clientIp(req)}`);
+    res.json({ success: true, restoredPhotos, version: memoryDb.version });
+  });
+
+  app.get('/api/db/export', (req, res) => {
+    res.status(410).json({ error: 'moved', message: 'Use Admin > Cloud Database & Backup with the backup password.' });
+  });
+  app.post('/api/db/import', (req, res) => {
+    res.status(410).json({ error: 'moved', message: 'Use Admin > Cloud Database & Backup with the backup password.' });
   });
 
   // SQLite Stats & Diagnostics Endpoint

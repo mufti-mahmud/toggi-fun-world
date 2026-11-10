@@ -46,8 +46,37 @@ function isHttps(req: express.Request): boolean {
   return req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 }
 
-function clientIp(req: express.Request): string {
+export function clientIp(req: express.Request): string {
   return String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+}
+
+/** Counts failed password attempts per key and blocks the key for the rest of the window once the limit is hit. */
+export function createAttemptLimiter(maxFailures: number, windowMs: number) {
+  const failures = new Map<string, { count: number; first: number }>();
+  return {
+    blockedForMs(key: string): number {
+      const record = failures.get(key);
+      if (!record) return 0;
+      const elapsed = Date.now() - record.first;
+      if (elapsed >= windowMs) {
+        failures.delete(key);
+        return 0;
+      }
+      return record.count >= maxFailures ? windowMs - elapsed : 0;
+    },
+    fail(key: string) {
+      const now = Date.now();
+      if (failures.size > 5000) {
+        for (const [k, v] of failures) if (now - v.first >= windowMs) failures.delete(k);
+      }
+      const record = failures.get(key);
+      if (!record || now - record.first >= windowMs) failures.set(key, { count: 1, first: now });
+      else record.count++;
+    },
+    reset(key: string) {
+      failures.delete(key);
+    }
+  };
 }
 
 function isTicketApiPath(path: string): boolean {
@@ -67,7 +96,7 @@ export function createSiteAuth(opts: SiteAuthOptions) {
   const enabled = opts.sitePassword.length > 0;
   // Deriving the key from the password means changing SITE_PASSWORD signs everyone out.
   const key = crypto.createHash('sha256').update(opts.sessionSecret || `tfw-session|${opts.sitePassword}`).digest();
-  const failedAttempts = new Map<string, { count: number; first: number }>();
+  const loginAttempts = createAttemptLimiter(MAX_FAILED_ATTEMPTS, ATTEMPT_WINDOW_MS);
 
   const sign = (exp: number) => crypto.createHmac('sha256', key).update(`v1.${exp}`).digest('base64url');
 
@@ -136,24 +165,19 @@ export function createSiteAuth(opts: SiteAuthOptions) {
 
     app.post('/api/auth/login', (req, res) => {
       const ip = clientIp(req);
-      const now = Date.now();
-      if (failedAttempts.size > 5000) {
-        for (const [k, v] of failedAttempts) if (now - v.first >= ATTEMPT_WINDOW_MS) failedAttempts.delete(k);
-      }
-      const record = failedAttempts.get(ip);
-      if (record && now - record.first < ATTEMPT_WINDOW_MS && record.count >= MAX_FAILED_ATTEMPTS) {
-        res.setHeader('Retry-After', String(Math.ceil((record.first + ATTEMPT_WINDOW_MS - now) / 1000)));
+      const waitMs = loginAttempts.blockedForMs(ip);
+      if (waitMs > 0) {
+        res.setHeader('Retry-After', String(Math.ceil(waitMs / 1000)));
         return res.status(429).json({ error: 'too_many_attempts' });
       }
 
       const password = typeof req.body?.password === 'string' ? req.body.password : '';
       if (!password || !safeEqual(password, opts.sitePassword)) {
-        if (!record || now - record.first >= ATTEMPT_WINDOW_MS) failedAttempts.set(ip, { count: 1, first: now });
-        else record.count++;
+        loginAttempts.fail(ip);
         return res.status(401).json({ error: 'invalid_password' });
       }
 
-      failedAttempts.delete(ip);
+      loginAttempts.reset(ip);
       issueSession(req, res);
       res.json({ success: true });
     });

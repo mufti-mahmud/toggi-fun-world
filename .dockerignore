@@ -9,3 +9,4 @@ dotnet-client
 parkManagement/.aistudio
 public/assets/aistudio/*.zip
 data/*.tmp.*
+data/restore-points

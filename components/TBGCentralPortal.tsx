@@ -1046,14 +1046,10 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
             {/* Action Buttons */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800">
               <div className="flex items-center gap-2">
-                <a
-                  href="/api/db/export"
-                  download
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-sm cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Backup JSON</span>
-                </a>
+                <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium bg-slate-900 border border-slate-800 text-slate-300">
+                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Backups: Admin → Cloud Database &amp; Backup (password protected)</span>
+                </span>
 
                 <button
                   onClick={handleRunCheckpoint}

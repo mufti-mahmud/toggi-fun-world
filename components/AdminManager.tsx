@@ -54,6 +54,19 @@ import { BulkImportModal } from './BulkImportModal';
 import { BulkEntityType, downloadExcelTemplate, parseSingleGnrExcel, downloadSingleGnrTemplate } from '../utils/excelImport';
 import { DEFAULT_SINGLE_GNR_RIDES } from '../constants';
 import { ConfirmModal } from './ConfirmModal';
+import { BackupPasswordModal } from './BackupPasswordModal';
+
+type BackupPrompt =
+  | { mode: 'export'; filename: string; resolve: (saved: boolean) => void }
+  | { mode: 'restore'; fileName: string; backup: any; createdAt: string | null; photoCount: number };
+
+async function readServerError(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body?.message) return String(body.message);
+  } catch {}
+  return `The server refused the request (HTTP ${res.status}).`;
+}
 import { database } from '../firebaseConfig';
 import { TOGGI_RIDES_IMAGE_MAP, getOfficialRideImage } from '../data/rideImagesCatalog';
 
@@ -276,6 +289,7 @@ export const AdminManager: React.FC<Props> = ({
   const [cloudSyncLoading, setCloudSyncLoading] = useState(false);
   const [cloudSyncFeedback, setCloudSyncFeedback] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
+  const [backupPrompt, setBackupPrompt] = useState<BackupPrompt | null>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreFeedback, setRestoreFeedback] = useState<string | null>(null);
   const [resetDayInput, setResetDayInput] = useState(new Date().toISOString().split('T')[0]);
@@ -386,27 +400,62 @@ export const AdminManager: React.FC<Props> = ({
     window.URL.revokeObjectURL(url);
   };
 
-  const handleExportDatabase = async (customFilename?: string) => {
+  // Resolves true once the backup file is downloaded, false if the admin cancels the password prompt.
+  const handleExportDatabase = (customFilename?: string): Promise<boolean> =>
+    new Promise(resolve => {
+      const filename = customFilename || `TFW_Backup_${new Date().toISOString().split('T')[0]}.json`;
+      setBackupPrompt({ mode: 'export', filename, resolve });
+    });
+
+  const submitBackupExport = async (password: string, filename: string, resolve: (saved: boolean) => void) => {
     setExportLoading(true);
     try {
-      let dbToExport: any = database.getFullDatabase();
-      if (!dbToExport || Object.keys(dbToExport).length === 0) {
-        try {
-          const res = await fetch('/api/db/export');
-          if (res.ok) dbToExport = await res.json();
-        } catch (e) {}
-      }
-      const filename = customFilename || `TFW_Park_Database_${new Date().toISOString().split('T')[0]}.json`;
-      downloadDatabaseBlob(dbToExport, filename);
+      const res = await fetch('/api/admin/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      if (!res.ok) return await readServerError(res);
+      const backup = await res.json();
+      downloadDatabaseBlob(backup, filename);
       onSaveAppConfig({ lastBackupDate: new Date().toISOString() });
       refreshCycleStats();
-      return true;
+      setBackupPrompt(null);
+      resolve(true);
+      return null;
     } catch (e) {
-      console.error('Export error:', e);
-      return false;
+      console.error('Backup download failed:', e);
+      return 'Could not reach the server. Check the connection and try again.';
     } finally {
       setExportLoading(false);
     }
+  };
+
+  const submitBackupRestore = async (password: string, backup: any) => {
+    setRestoreLoading(true);
+    try {
+      const res = await fetch('/api/admin/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, backup })
+      });
+      if (!res.ok) return await readServerError(res);
+      const result = await res.json();
+      setBackupPrompt(null);
+      setRestoreFeedback(`Backup restored${result.restoredPhotos ? ` with ${result.restoredPhotos} photo(s)` : ''}. Reloading so every screen shows the restored data…`);
+      setTimeout(() => window.location.reload(), 1500);
+      return null;
+    } catch (e) {
+      console.error('Restore failed:', e);
+      return 'Could not reach the server. Nothing was restored.';
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
+  const closeBackupPrompt = () => {
+    if (backupPrompt?.mode === 'export') backupPrompt.resolve(false);
+    setBackupPrompt(null);
   };
 
   // 3-Month Interval Cycle Reset (Archive & Start Next 3-Month Interval)
@@ -417,7 +466,10 @@ export const AdminManager: React.FC<Props> = ({
       // Step 1: Download full 3-month dataset snapshot backup first
       const stats = database.getCycleStats(appConfig.cycleStartDate, 3);
       const backupFilename = `TFW_Quarterly_3Months_Backup_${stats.cycleStartDate}_to_${stats.cycleEndDate}.json`;
-      await handleExportDatabase(backupFilename);
+      if (!(await handleExportDatabase(backupFilename))) {
+        setQuarterlyResetFeedback('Cancelled: no backup was downloaded, so nothing was reset.');
+        return;
+      }
 
       // Step 2: Perform reset & advance cycle
       const res = await database.resetQuarterlyCycle(nextCycleStartDate);
@@ -449,7 +501,10 @@ export const AdminManager: React.FC<Props> = ({
     try {
       // Download safety backup first
       const backupFilename = `TFW_Safety_Backup_Before_Cleanup_${new Date().toISOString().split('T')[0]}.json`;
-      await handleExportDatabase(backupFilename);
+      if (!(await handleExportDatabase(backupFilename))) {
+        setOlderThanFeedback('Cancelled: no backup was downloaded, so nothing was deleted.');
+        return;
+      }
 
       const res = await database.cleanDataOlderThan(olderThanCutoff);
       if (res.success) {
@@ -468,29 +523,28 @@ export const AdminManager: React.FC<Props> = ({
 
   const handleRestoreDatabase = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    if (restoreFileInputRef.current) restoreFileInputRef.current.value = '';
     if (!file) return;
-    setRestoreLoading(true);
     setRestoreFeedback(null);
     const reader = new FileReader();
-    reader.onload = async (event) => {
+    reader.onload = (event) => {
       try {
-        const text = event.target?.result as string;
-        const parsed = JSON.parse(text);
-        const res = await database.importDatabase(parsed);
-        if (res.success) {
-          setRestoreFeedback('Database successfully restored from JSON backup & broadcasted everywhere!');
-          refreshCycleStats();
-          setTimeout(() => {
-            window.location.reload();
-          }, 1200);
-        } else {
-          setRestoreFeedback('Failed to restore: Invalid backup structure.');
+        const parsed = JSON.parse(event.target?.result as string);
+        const isFullBackup = parsed?.format === 'tfw-backup';
+        const db = isFullBackup ? parsed.database : parsed;
+        if (!db?.config || !db?.data) {
+          setRestoreFeedback('This file is not a Toggi Fun World backup. Choose a file downloaded with "Export Full Database".');
+          return;
         }
-      } catch (err) {
-        setRestoreFeedback('Error reading backup file. Please select a valid JSON backup file.');
-      } finally {
-        setRestoreLoading(false);
-        if (restoreFileInputRef.current) restoreFileInputRef.current.value = '';
+        setBackupPrompt({
+          mode: 'restore',
+          fileName: file.name,
+          backup: parsed,
+          createdAt: isFullBackup && parsed.createdAt ? String(parsed.createdAt) : null,
+          photoCount: isFullBackup && parsed.images ? Object.keys(parsed.images).length : 0
+        });
+      } catch {
+        setRestoreFeedback('Could not read this file. Choose a .json backup file.');
       }
     };
     reader.readAsText(file);
@@ -3913,11 +3967,14 @@ export const AdminManager: React.FC<Props> = ({
                   <div>
                     <div className="flex items-center gap-2 mb-1.5">
                       <Download className="w-5 h-5 text-emerald-400" />
-                      <h4 className="text-sm font-bold text-white">Full Database JSON Export</h4>
+                      <h4 className="text-sm font-bold text-white">Download Backup</h4>
                     </div>
                     <p className="text-xs text-gray-400">
-                      Download a complete portable snapshot of your entire database (configurations, staff, ride counts, sales history, and maintenance tickets).
+                      Download one file with the whole database (settings, staff, ride counts, sales, maintenance tickets) and the ride photos. Needs the backup password. Keep the file somewhere safe and private.
                     </p>
+                    {appConfig.lastBackupDate && (
+                      <p className="text-xs text-gray-500 mt-1.5">Last backup: {new Date(appConfig.lastBackupDate).toLocaleString()}</p>
+                    )}
                   </div>
 
                   <button
@@ -3927,7 +3984,7 @@ export const AdminManager: React.FC<Props> = ({
                     className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-950/40 transition-all cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
-                    {exportLoading ? 'Exporting JSON...' : 'Export Full Database (.json)'}
+                    {exportLoading ? 'Preparing backup...' : 'Download Backup (.json)'}
                   </button>
                 </div>
 
@@ -3936,10 +3993,10 @@ export const AdminManager: React.FC<Props> = ({
                   <div>
                     <div className="flex items-center gap-2 mb-1.5">
                       <Upload className="w-5 h-5 text-purple-400" />
-                      <h4 className="text-sm font-bold text-white">Restore Database from JSON Backup</h4>
+                      <h4 className="text-sm font-bold text-white">Restore from Backup</h4>
                     </div>
                     <p className="text-xs text-gray-400">
-                      Upload and restore a previously downloaded JSON backup file. This will update the local SQLite database and broadcast to all connected screens.
+                      Replace all current data with a backup file. Needs the backup password. The server keeps a safety copy of the current data first, so a wrong restore can be undone.
                     </p>
                   </div>
 
@@ -3958,7 +4015,7 @@ export const AdminManager: React.FC<Props> = ({
                       className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
                     >
                       <Upload className="w-4 h-4" />
-                      {restoreLoading ? 'Restoring Database...' : 'Upload & Restore Backup (.json)'}
+                      {restoreLoading ? 'Restoring...' : 'Choose Backup File & Restore'}
                     </button>
                   </div>
 
@@ -4745,6 +4802,31 @@ export const AdminManager: React.FC<Props> = ({
           confirmDialog.onConfirm();
         }}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
+
+      <BackupPasswordModal
+        isOpen={backupPrompt !== null}
+        variant={backupPrompt?.mode === 'restore' ? 'danger' : 'primary'}
+        title={backupPrompt?.mode === 'restore' ? 'Restore this backup?' : 'Download backup'}
+        confirmLabel={backupPrompt?.mode === 'restore' ? 'Restore and replace all data' : 'Download backup'}
+        message={backupPrompt?.mode === 'restore' ? (
+          <>
+            <p>
+              File: <span className="font-semibold text-white break-all">{backupPrompt.fileName}</span>
+              {backupPrompt.createdAt && <> (made {new Date(backupPrompt.createdAt).toLocaleString()})</>}
+              {backupPrompt.photoCount > 0 && <>, {backupPrompt.photoCount} photo(s)</>}
+            </p>
+            <p>This replaces <span className="font-semibold text-red-300">all current data on every device</span> with the backup. A safety copy of today's data is saved on the server first.</p>
+          </>
+        ) : (
+          <p>Enter the backup password to download the full database and ride photos.</p>
+        )}
+        onSubmit={(password) => {
+          if (backupPrompt?.mode === 'export') return submitBackupExport(password, backupPrompt.filename, backupPrompt.resolve);
+          if (backupPrompt?.mode === 'restore') return submitBackupRestore(password, backupPrompt.backup);
+          return Promise.resolve(null);
+        }}
+        onClose={closeBackupPrompt}
       />
 
     </div>
