@@ -289,7 +289,7 @@ export const Reports = ({
         let tkt = Number(tktCounts[ride.id] !== undefined ? tktCounts[ride.id] : (tktCounts[String(ride.id)] || 0));
         const rawCount = Number(counts[ride.id] !== undefined ? counts[ride.id] : (counts[String(ride.id)] || 0));
         if (pkg === 0 && tkt === 0 && rawCount > 0) {
-          pkg = Math.round(rawCount * 0.25);
+          pkg = rawCount;
           tkt = rawCount - pkg;
         }
         totalPkg += pkg;
@@ -311,8 +311,9 @@ export const Reports = ({
     const rId = Number(selectedGameId);
     return reportData.reduce((sum, row) => {
       let pkg = Number(row.pkgCounts[rId] !== undefined ? row.pkgCounts[rId] : (row.pkgCounts[String(rId)] || 0));
+      const tkt = Number(row.tktCounts[rId] !== undefined ? row.tktCounts[rId] : (row.tktCounts[String(rId)] || 0));
       const raw = Number(row.counts[rId] !== undefined ? row.counts[rId] : (row.counts[String(rId)] || 0));
-      if (pkg === 0 && raw > 0) pkg = Math.round(raw * 0.25);
+      if (pkg === 0 && tkt === 0 && raw > 0) pkg = raw;
       return sum + pkg;
     }, 0);
   }, [reportData, selectedGameId]);
@@ -324,9 +325,7 @@ export const Reports = ({
     }
     const rId = Number(selectedGameId);
     return reportData.reduce((sum, row) => {
-      let tkt = Number(row.tktCounts[rId] !== undefined ? row.tktCounts[rId] : (row.tktCounts[String(rId)] || 0));
-      const raw = Number(row.counts[rId] !== undefined ? row.counts[rId] : (row.counts[String(rId)] || 0));
-      if (tkt === 0 && raw > 0) tkt = raw - Math.round(raw * 0.25);
+      const tkt = Number(row.tktCounts[rId] !== undefined ? row.tktCounts[rId] : (row.tktCounts[String(rId)] || 0));
       return sum + tkt;
     }, 0);
   }, [reportData, selectedGameId]);
@@ -398,7 +397,7 @@ export const Reports = ({
         let tkt = Number(row.tktCounts[rId] !== undefined ? row.tktCounts[rId] : (row.tktCounts[String(rId)] || 0));
         const raw = Number(row.counts[rId] !== undefined ? row.counts[rId] : (row.counts[String(rId)] || 0));
         if (pkg === 0 && tkt === 0 && raw > 0) {
-          pkg = Math.round(raw * 0.25);
+          pkg = raw;
           tkt = raw - pkg;
         }
         const totalVal = pkg + tkt;
@@ -456,7 +455,7 @@ export const Reports = ({
           let tkt = Number(row.tktCounts[r.id] !== undefined ? row.tktCounts[r.id] : (row.tktCounts[String(r.id)] || 0));
           const raw = Number(row.counts[r.id] !== undefined ? row.counts[r.id] : (row.counts[String(r.id)] || 0));
           if (pkg === 0 && tkt === 0 && raw > 0) {
-            pkg = Math.round(raw * 0.25);
+            pkg = raw;
             tkt = raw - pkg;
           }
           const rideTot = pkg + tkt;
@@ -715,7 +714,7 @@ export const Reports = ({
                       let tkt = Number(row.tktCounts[ride.id] !== undefined ? row.tktCounts[ride.id] : (row.tktCounts[String(ride.id)] || 0));
                       const raw = Number(row.counts[ride.id] !== undefined ? row.counts[ride.id] : (row.counts[String(ride.id)] || 0));
                       if (pkg === 0 && tkt === 0 && raw > 0) {
-                        pkg = Math.round(raw * 0.25);
+                        pkg = raw;
                         tkt = raw - pkg;
                       }
                       const rideVal = pkg + tkt;
@@ -736,7 +735,7 @@ export const Reports = ({
                   let tkt = Number(row.tktCounts[rId] !== undefined ? row.tktCounts[rId] : (row.tktCounts[String(rId)] || 0));
                   const raw = Number(row.counts[rId] !== undefined ? row.counts[rId] : (row.counts[String(rId)] || 0));
                   if (pkg === 0 && tkt === 0 && raw > 0) {
-                    pkg = Math.round(raw * 0.25);
+                    pkg = raw;
                     tkt = raw - pkg;
                   }
                   const totalVal = pkg + tkt;
@@ -7673,7 +7672,7 @@ export const OperationOfficerRideView: React.FC<OperationOfficerRideViewProps> =
       const c = currentCounts[ride.id] ?? currentCounts[String(ride.id)];
       const rawNum = c !== undefined ? Number(c) : 0;
       if (p === 0 && t === 0 && rawNum > 0) {
-        p = Math.round(rawNum * 0.7);
+        p = rawNum;
         t = rawNum - p;
       }
 
@@ -7742,7 +7741,7 @@ export const OperationOfficerRideView: React.FC<OperationOfficerRideViewProps> =
         const c = cCounts[r.id] ?? cCounts[String(r.id)];
         const rawNum = c !== undefined ? Number(c) : 0;
         if (p === 0 && t === 0 && rawNum > 0) {
-          p = Math.round(rawNum * 0.7);
+          p = rawNum;
           t = rawNum - p;
         }
         const tot = p + t;
@@ -8061,7 +8060,7 @@ export const OperationOfficerRideView: React.FC<OperationOfficerRideViewProps> =
           const rawTotal = currentCounts[ride.id] ?? currentCounts[String(ride.id)];
           const rawNum = rawTotal !== undefined ? Number(rawTotal) : 0;
           if (pkgVal === 0 && tktVal === 0 && rawNum > 0) {
-            pkgVal = Math.round(rawNum * 0.7);
+            pkgVal = rawNum;
             tktVal = rawNum - pkgVal;
           }
           const totalVal = pkgVal + tktVal;

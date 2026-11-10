@@ -526,7 +526,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
 
       // Operational Officer report parity: proportional fallback to raw count if specific pkg/tkt are 0
       if (p === 0 && t === 0 && raw > 0) {
-        p = Math.round(raw * 0.25);
+        p = raw;
         t = raw - p;
       }
       const rideTotal = p + t;
@@ -557,7 +557,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
       const raw = Number(rawMap[idStr] ?? 0);
 
       if (p === 0 && t === 0 && raw > 0) {
-        p = Math.round(raw * 0.25);
+        p = raw;
         t = raw - p;
       }
       const rideTotal = p + t;
@@ -611,7 +611,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
         const raw = Number(rMap[idStr] ?? rMap[ride.id] ?? 0);
 
         if (p === 0 && t === 0 && raw > 0) {
-          p = Math.round(raw * 0.25);
+          p = raw;
           t = raw - p;
         }
 
@@ -1173,6 +1173,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
       xtremePackRatio: number;
       totalRevenue: number;
       count: number;
+      details?: string;
     }> = {};
 
     // Initialize all 12 TFW levels (Basement 01, Level - 01, and Level 8 to Level 17) so every level is consistently presented
@@ -1207,6 +1208,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
           map[name].xtremePackRatio += (item.xtremePackRatio || 0);
           map[name].totalRevenue += (item.totalRevenue || 0);
           map[name].count += 1;
+          if (item.details) map[name].details = item.details;
         }
       }
     }
@@ -2076,7 +2078,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
                     No closing report received from group <strong className="text-white">"TFW Management Team"</strong> for {salesRangeStart === salesRangeEnd ? salesRangeStart : `${salesRangeStart} to ${salesRangeEnd}`} yet.
                   </p>
                   <p className="text-[10px] text-gray-500">
-                    Messages arrive everyday after 9:00 PM BST. The app automatically listens and parses incoming reports.
+                    Messages arrive everyday after 8:30 PM BST. The app automatically listens and parses incoming reports.
                   </p>
                   <button
                     type="button"
@@ -2885,7 +2887,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
                 </span>
               </div>
               <p className="text-xs text-gray-400">
-                Nightly closing reports collected from WhatsApp group <strong className="text-emerald-300">"TFW Management Team"</strong> (after 9:00 PM BST • Read-Only)
+                Nightly closing reports collected from WhatsApp group <strong className="text-emerald-300">"TFW Management Team"</strong> (after 8:30 PM BST • Read-Only)
               </p>
             </div>
           </div>
@@ -3023,7 +3025,12 @@ export const ManagementSummaryView: React.FC<Props> = ({
                   <div className="flex items-center justify-between border-b border-gray-800 pb-2 mb-3">
                     <span className="font-extrabold text-white text-base tracking-wide flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                      {counter.counterName}
+                      <span className="flex flex-col leading-tight">
+                        <span>{counter.counterName}</span>
+                        {counter.details && (
+                          <span className="text-[11px] font-medium text-gray-400 tracking-normal">{counter.details}</span>
+                        )}
+                      </span>
                     </span>
                     <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
                       TFW Counter
@@ -3089,7 +3096,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
               No counter breakdown report received from WhatsApp group <strong className="text-emerald-300">"TFW Management Team"</strong> for {counterRangeStart === counterRangeEnd ? counterRangeStart : `${counterRangeStart} to ${counterRangeEnd}`}.
             </p>
             <p className="text-xs text-gray-400 max-w-lg mx-auto">
-              Everyday messages arrive in the group after 9:00 PM BST. The application automatically listens and parses counter statistics into this view without sending any WhatsApp messages.
+              Everyday messages arrive in the group after 8:30 PM BST. The application automatically listens and parses counter statistics into this view without sending any WhatsApp messages.
             </p>
             <div className="pt-2">
               <button

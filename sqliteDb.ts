@@ -708,29 +708,6 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
       if (row.package_sales) try { data.packageSales[d] = JSON.parse(row.package_sales); } catch {}
     }
 
-    // Ensure historical guest counts entered by ride associates in dailyCounts are preserved and split proportionally
-    for (const d of Object.keys(data.dailyCounts || {})) {
-      if (!data.dailyPackageCounts[d]) data.dailyPackageCounts[d] = {};
-      if (!data.dailyTicketCounts[d]) data.dailyTicketCounts[d] = {};
-      const dayCounts = data.dailyCounts[d] || {};
-      for (const [rId, cVal] of Object.entries(dayCounts)) {
-        const num = Number(cVal) || 0;
-        if (num > 0) {
-          const pkgNum = Number(data.dailyPackageCounts[d][rId]) || 0;
-          const tktNum = Number(data.dailyTicketCounts[d][rId]) || 0;
-          if (pkgNum === 0 && tktNum === 0) {
-            const p = Math.round(num * 0.25);
-            data.dailyPackageCounts[d][rId] = p;
-            data.dailyTicketCounts[d][rId] = num - p;
-          } else if (pkgNum === num && tktNum === 0) {
-            const p = Math.round(num * 0.25);
-            data.dailyPackageCounts[d][rId] = p;
-            data.dailyTicketCounts[d][rId] = num - p;
-          }
-        }
-      }
-    }
-
     // History Logs
     const historyRows = db.prepare('SELECT * FROM history_logs ORDER BY id ASC LIMIT 500').all() as any[];
     data.historyLog = historyRows.map(h => {

@@ -43,7 +43,6 @@ import {
   AssignmentLockRecord,
   ManagementWhatsAppReport
 } from './types';
-import { getSeedManagementReports } from './utils/whatsappManagementParser';
 import { useAuth, Role } from './hooks/useAuth';
 import useFirebaseSync from './hooks/useFirebaseSync';
 import { isFirebaseConfigured, database } from './firebaseConfig';
@@ -232,26 +231,15 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
     const { data: rawWhatsappReports } = useFirebaseSync<Record<string, ManagementWhatsAppReport>>('data/whatsappManagementReports', {});
     
     const whatsappManagementReports = useMemo(() => {
-        const seeds = getSeedManagementReports();
-        const merged: Record<string, ManagementWhatsAppReport> = { ...seeds };
+        const reports: Record<string, ManagementWhatsAppReport> = {};
         if (rawWhatsappReports && typeof rawWhatsappReports === 'object') {
             Object.entries(rawWhatsappReports).forEach(([date, report]) => {
-                if (report) {
-                    merged[date] = {
-                        ...(seeds[date] || {}),
-                        ...report,
-                        salesAndRevenue: {
-                            ...(seeds[date]?.salesAndRevenue || {}),
-                            ...(report.salesAndRevenue || {})
-                        },
-                        counterBreakdown: (report.counterBreakdown && report.counterBreakdown.length >= 12)
-                            ? report.counterBreakdown
-                            : (seeds[date]?.counterBreakdown || report.counterBreakdown || [])
-                    };
+                if (report && report.date) {
+                    reports[date] = { ...report, counterBreakdown: report.counterBreakdown || [] };
                 }
             });
         }
-        return merged;
+        return reports;
     }, [rawWhatsappReports]);
 
     const [appLogo, setAppLogo] = useState<string | null>(null);

@@ -19,7 +19,7 @@ import {
 } from './constants';
 import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite } from './sqliteDb';
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
-import { isManagementSalesMessage, parseManagementReportText, getSeedManagementReports } from './utils/whatsappManagementParser';
+import { isManagementSalesMessage, parseManagementReportText } from './utils/whatsappManagementParser';
 import { createSiteAuth, readApiKey, safeEqual, clientIp, createAttemptLimiter } from './siteAuth';
 
 // Ensure production mode if running from compiled server.cjs bundle
@@ -427,124 +427,18 @@ function loadDatabase(): any {
         if (!sqliteState.data.dailyPackageCounts) sqliteState.data.dailyPackageCounts = {};
         if (!sqliteState.data.dailyTicketCounts) sqliteState.data.dailyTicketCounts = {};
         
-        // Also check if database.json has any dailyCounts or dates not yet synced
+        // Dates that exist only in database.json (written before the SQLite move) are copied across unchanged.
         if (fs.existsSync(DB_FILE)) {
           try {
             const jsonDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-            if (jsonDb?.data?.dailyCounts) {
-              for (const [d, counts] of Object.entries(jsonDb.data.dailyCounts as Record<string, any>)) {
-                if (!sqliteState.data.dailyCounts[d]) {
-                  sqliteState.data.dailyCounts[d] = counts;
-                }
-                if (!sqliteState.data.dailyPackageCounts[d]) {
-                  sqliteState.data.dailyPackageCounts[d] = {};
-                }
-                if (!sqliteState.data.dailyTicketCounts[d]) {
-                  sqliteState.data.dailyTicketCounts[d] = {};
-                }
-                for (const [rId, c] of Object.entries(counts || {})) {
-                  const num = Number(c) || 0;
-                  if (num > 0) {
-                    const curP = Number(sqliteState.data.dailyPackageCounts[d][rId]) || 0;
-                    const curT = Number(sqliteState.data.dailyTicketCounts[d][rId]) || 0;
-                    if (curP === 0 && curT === 0) {
-                      const p = Math.round(num * 0.25);
-                      sqliteState.data.dailyPackageCounts[d][rId] = p;
-                      sqliteState.data.dailyTicketCounts[d][rId] = num - p;
-                    } else if (curP === num && curT === 0) {
-                      const p = Math.round(num * 0.25);
-                      sqliteState.data.dailyPackageCounts[d][rId] = p;
-                      sqliteState.data.dailyTicketCounts[d][rId] = num - p;
-                    }
-                  }
-                }
+            const jsonOnlyDates = Object.keys(jsonDb?.data?.dailyCounts || {}).filter(d => !sqliteState.data.dailyCounts[d]);
+            for (const d of jsonOnlyDates) {
+              for (const coll of ['dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts'] as const) {
+                const counts = jsonDb.data[coll]?.[d];
+                if (counts && typeof counts === 'object') sqliteState.data[coll][d] = counts;
               }
             }
           } catch (_) {}
-        }
-
-        // Ensure yesterday (2026-11-06) operations, tickets, and management reports are fully hydrated
-        if (!sqliteState.data.dailyCounts['2026-11-06'] || Object.keys(sqliteState.data.dailyCounts['2026-11-06']).length === 0) {
-          sqliteState.data.dailyCounts['2026-11-06'] = {};
-          sqliteState.data.dailyPackageCounts['2026-11-06'] = {};
-          sqliteState.data.dailyTicketCounts['2026-11-06'] = {};
-          const rKeys = Object.keys(sqliteState.config?.rides || {});
-          for (let i = 0; i < rKeys.length; i++) {
-            const rKey = rKeys[i];
-            const p = i < 63 ? 1 : 0;
-            const t = i < 108 ? 2 : 0;
-            sqliteState.data.dailyPackageCounts['2026-11-06'][rKey] = p;
-            sqliteState.data.dailyTicketCounts['2026-11-06'][rKey] = t;
-            sqliteState.data.dailyCounts['2026-11-06'][rKey] = p + t;
-          }
-        }
-        if (!sqliteState.data.maintenanceTickets) sqliteState.data.maintenanceTickets = {};
-        if (!sqliteState.data.maintenanceTickets['2026-11-06'] || Object.keys(sqliteState.data.maintenanceTickets['2026-11-06']).length === 0) {
-          sqliteState.data.maintenanceTickets['2026-11-06'] = {
-            'maint-20261106-01': {
-              id: 'maint-20261106-01',
-              date: '2026-11-06',
-              rideId: 133,
-              rideName: 'Bumper Car',
-              floor: 'Floor 11',
-              problem: 'Platform power rail contact misalignment and sparks during heavy operation',
-              status: 'solved',
-              priority: 'high',
-              reportedById: 10,
-              reportedByName: 'Md. Hafizur Rahman',
-              reportedByRole: 'operator',
-              reportedAt: '2026-11-06T14:15:00+06:00',
-              assignedToId: 10,
-              assignedToName: 'Md. Hafizur Rahman',
-              inProgressAt: '2026-11-06T14:25:00+06:00',
-              solvedAt: '2026-11-06T15:30:00+06:00',
-              resolutionNotes: 'Platform power rail aligned, contact shoes replaced and clearance safety tested.',
-              whatsappGroup: 'TFW Issue Resolve (Tech+ Guest Feedback)',
-              whatsappChatId: '120363024724303859@g.us'
-            },
-            'maint-20261106-02': {
-              id: 'maint-20261106-02',
-              date: '2026-11-06',
-              rideId: 122,
-              rideName: 'Laser Maze',
-              floor: 'Floor 10',
-              problem: 'Optical sensor #4 beam reflection misreading guest trips',
-              status: 'solved',
-              priority: 'normal',
-              reportedById: 12,
-              reportedByName: 'Md. Kabir Hossain',
-              reportedByRole: 'operator',
-              reportedAt: '2026-11-06T16:00:00+06:00',
-              assignedToId: 12,
-              assignedToName: 'Md. Kabir Hossain',
-              inProgressAt: '2026-11-06T16:10:00+06:00',
-              solvedAt: '2026-11-06T16:45:00+06:00',
-              resolutionNotes: 'Optical sensor recalibrated, mirrors cleaned and sensitivity adjusted.',
-              whatsappGroup: 'TFW Issue Resolve (Tech+ Guest Feedback)',
-              whatsappChatId: '120363024724303859@g.us'
-            },
-            'maint-20261106-03': {
-              id: 'maint-20261106-03',
-              date: '2026-11-06',
-              rideId: 135,
-              rideName: 'VR Tank',
-              floor: 'Floor 12',
-              problem: 'Station 2 VR headset video flickering on rapid turns',
-              status: 'solved',
-              priority: 'normal',
-              reportedById: 10,
-              reportedByName: 'Md. Hafizur Rahman',
-              reportedByRole: 'operator',
-              reportedAt: '2026-11-06T17:20:00+06:00',
-              assignedToId: 10,
-              assignedToName: 'Md. Hafizur Rahman',
-              inProgressAt: '2026-11-06T17:30:00+06:00',
-              solvedAt: '2026-11-06T18:10:00+06:00',
-              resolutionNotes: 'HDMI cable tension clamp secured, cable interface cleaned, 3 test rounds verified.',
-              whatsappGroup: 'TFW Issue Resolve (Tech+ Guest Feedback)',
-              whatsappChatId: '120363024724303859@g.us'
-            }
-          };
         }
 
         if (sqliteState.config?.rides) {
@@ -564,17 +458,6 @@ function loadDatabase(): any {
         }
 
         if (!sqliteState.data) sqliteState.data = {};
-        const seeds = getSeedManagementReports();
-        if (!sqliteState.data.whatsappManagementReports || Object.keys(sqliteState.data.whatsappManagementReports).length === 0) {
-          sqliteState.data.whatsappManagementReports = seeds;
-        } else {
-          for (const [sDate, sRep] of Object.entries(seeds)) {
-            const existing = sqliteState.data.whatsappManagementReports[sDate];
-            if (!existing || !existing.salesAndRevenue?.totalFootFall || (existing.counterBreakdown && existing.counterBreakdown.length < 12)) {
-              sqliteState.data.whatsappManagementReports[sDate] = sRep;
-            }
-          }
-        }
 
         console.log(`⚡ Loaded database state from offline SQLite database (version: ${sqliteState.version}, rides: ${Object.keys(sqliteState.config.rides || {}).length})`);
         memoryDb = sqliteState;
@@ -612,136 +495,9 @@ function loadDatabase(): any {
       
       let healed = false;
 
-      const seeds = getSeedManagementReports();
-      if (parsed.data.whatsappManagementReports === undefined || Object.keys(parsed.data.whatsappManagementReports).length === 0) {
-        parsed.data.whatsappManagementReports = seeds;
-        healed = true;
-      } else {
-        for (const [sDate, sRep] of Object.entries(seeds)) {
-          const existing = parsed.data.whatsappManagementReports[sDate];
-          if (!existing || !existing.salesAndRevenue?.totalFootFall || (existing.counterBreakdown && existing.counterBreakdown.length < 12)) {
-            parsed.data.whatsappManagementReports[sDate] = sRep;
-            healed = true;
-          }
-        }
-      }
 
       // Auto-heal / correct any tickets where Virtual Egg was previously tagged as VR Tank
 
-      // Auto-heal dailyPackageCounts and dailyTicketCounts from dailyCounts for all historical dates
-      if (parsed.data?.dailyCounts && typeof parsed.data.dailyCounts === 'object') {
-        if (!parsed.data.dailyPackageCounts || typeof parsed.data.dailyPackageCounts !== 'object') parsed.data.dailyPackageCounts = {};
-        if (!parsed.data.dailyTicketCounts || typeof parsed.data.dailyTicketCounts !== 'object') parsed.data.dailyTicketCounts = {};
-        for (const [d, counts] of Object.entries(parsed.data.dailyCounts as Record<string, any>)) {
-          if (!parsed.data.dailyPackageCounts[d]) parsed.data.dailyPackageCounts[d] = {};
-          if (!parsed.data.dailyTicketCounts[d]) parsed.data.dailyTicketCounts[d] = {};
-          for (const [rId, c] of Object.entries(counts || {})) {
-            const num = Number(c) || 0;
-            if (num > 0) {
-              const currentPkg = Number(parsed.data.dailyPackageCounts[d][rId]) || 0;
-              const currentTkt = Number(parsed.data.dailyTicketCounts[d][rId]) || 0;
-              if (currentPkg === 0 && currentTkt === 0) {
-                const p = Math.round(num * 0.25);
-                parsed.data.dailyPackageCounts[d][rId] = p;
-                parsed.data.dailyTicketCounts[d][rId] = num - p;
-                healed = true;
-              } else if (currentPkg === num && currentTkt === 0) {
-                const p = Math.round(num * 0.25);
-                parsed.data.dailyPackageCounts[d][rId] = p;
-                parsed.data.dailyTicketCounts[d][rId] = num - p;
-                healed = true;
-              }
-            }
-          }
-        }
-      }
-
-      // Ensure yesterday (2026-11-06) operations, tickets, and management reports are fully hydrated
-      if (!parsed.data.dailyCounts['2026-11-06'] || Object.keys(parsed.data.dailyCounts['2026-11-06']).length === 0) {
-        parsed.data.dailyCounts['2026-11-06'] = {};
-        parsed.data.dailyPackageCounts['2026-11-06'] = {};
-        parsed.data.dailyTicketCounts['2026-11-06'] = {};
-        const rKeys = Object.keys(parsed.config?.rides || {});
-        for (let i = 0; i < rKeys.length; i++) {
-          const rKey = rKeys[i];
-          const p = i < 63 ? 1 : 0;
-          const t = i < 108 ? 2 : 0;
-          parsed.data.dailyPackageCounts['2026-11-06'][rKey] = p;
-          parsed.data.dailyTicketCounts['2026-11-06'][rKey] = t;
-          parsed.data.dailyCounts['2026-11-06'][rKey] = p + t;
-        }
-        healed = true;
-      }
-
-      if (!parsed.data.maintenanceTickets) parsed.data.maintenanceTickets = {};
-      if (!parsed.data.maintenanceTickets['2026-11-06'] || Object.keys(parsed.data.maintenanceTickets['2026-11-06']).length === 0) {
-        parsed.data.maintenanceTickets['2026-11-06'] = {
-          'maint-20261106-01': {
-            id: 'maint-20261106-01',
-            date: '2026-11-06',
-            rideId: 133,
-            rideName: 'Bumper Car',
-            floor: 'Floor 11',
-            problem: 'Platform power rail contact misalignment and sparks during heavy operation',
-            status: 'solved',
-            priority: 'high',
-            reportedById: 10,
-            reportedByName: 'Md. Hafizur Rahman',
-            reportedByRole: 'operator',
-            reportedAt: '2026-11-06T14:15:00+06:00',
-            assignedToId: 10,
-            assignedToName: 'Md. Hafizur Rahman',
-            inProgressAt: '2026-11-06T14:25:00+06:00',
-            solvedAt: '2026-11-06T15:30:00+06:00',
-            resolutionNotes: 'Platform power rail aligned, contact shoes replaced and clearance safety tested.',
-            whatsappGroup: 'TFW Issue Resolve (Tech+ Guest Feedback)',
-            whatsappChatId: '120363024724303859@g.us'
-          },
-          'maint-20261106-02': {
-            id: 'maint-20261106-02',
-            date: '2026-11-06',
-            rideId: 122,
-            rideName: 'Laser Maze',
-            floor: 'Floor 10',
-            problem: 'Optical sensor #4 beam reflection misreading guest trips',
-            status: 'solved',
-            priority: 'normal',
-            reportedById: 12,
-            reportedByName: 'Md. Kabir Hossain',
-            reportedByRole: 'operator',
-            reportedAt: '2026-11-06T16:00:00+06:00',
-            assignedToId: 12,
-            assignedToName: 'Md. Kabir Hossain',
-            inProgressAt: '2026-11-06T16:10:00+06:00',
-            solvedAt: '2026-11-06T16:45:00+06:00',
-            resolutionNotes: 'Optical sensor recalibrated, mirrors cleaned and sensitivity adjusted.',
-            whatsappGroup: 'TFW Issue Resolve (Tech+ Guest Feedback)',
-            whatsappChatId: '120363024724303859@g.us'
-          },
-          'maint-20261106-03': {
-            id: 'maint-20261106-03',
-            date: '2026-11-06',
-            rideId: 135,
-            rideName: 'VR Tank',
-            floor: 'Floor 12',
-            problem: 'Station 2 VR headset video flickering on rapid turns',
-            status: 'solved',
-            priority: 'normal',
-            reportedById: 10,
-            reportedByName: 'Md. Hafizur Rahman',
-            reportedByRole: 'operator',
-            reportedAt: '2026-11-06T17:20:00+06:00',
-            assignedToId: 10,
-            assignedToName: 'Md. Hafizur Rahman',
-            inProgressAt: '2026-11-06T17:30:00+06:00',
-            solvedAt: '2026-11-06T18:10:00+06:00',
-            resolutionNotes: 'HDMI cable tension clamp secured, cable interface cleaned, 3 test rounds verified.',
-            whatsappGroup: 'TFW Issue Resolve (Tech+ Guest Feedback)',
-            whatsappChatId: '120363024724303859@g.us'
-          }
-        };
-        healed = true;
-      }
       if (parsed.data.maintenanceTickets) {
         for (const dayTickets of Object.values(parsed.data.maintenanceTickets) as any[]) {
           if (dayTickets && typeof dayTickets === 'object') {
@@ -1114,6 +870,62 @@ function broadcastMutation(mutation: ServerMutationEvent) {
       return false;
     }
   });
+}
+
+// Saves a nightly "TFW Total Cash Collection" report. Polling sees the same message for hours, and a later
+// correction (or a manual paste) must not be replaced by an older copy, so only a newer, different message wins.
+function storeManagementReport(report: any, source: string): boolean {
+  const db = loadDatabase();
+  if (!db.data) db.data = {};
+  if (!db.data.whatsappManagementReports) db.data.whatsappManagementReports = {};
+  const existing = db.data.whatsappManagementReports[report.date];
+  if (existing) {
+    if (existing.rawMessage === report.rawMessage) return false;
+    const existingTime = Date.parse(existing.timestamp || '');
+    const newTime = Date.parse(report.timestamp || '');
+    if (Number.isFinite(existingTime) && Number.isFinite(newTime) && newTime < existingTime) return false;
+  }
+  db.data.whatsappManagementReports[report.date] = report;
+  saveDatabaseToDisk({
+    type: 'set',
+    path: `data/whatsappManagementReports/${report.date}`,
+    value: report,
+    senderId: 'whatsapp-mgmt-sync'
+  }, true);
+  broadcastMutation({
+    type: 'whatsapp-management-report-received',
+    report,
+    date: report.date
+  });
+  console.log(`[Management Report] ${source}: stored ${report.date}, total revenue ${report.salesAndRevenue?.totalRevenue}, ${report.counterBreakdown?.length || 0} counters`);
+  return true;
+}
+
+// Text of a Green API message in either the journal shape (lastIncomingMessages / getChatHistory) or the webhook shape.
+function extractGreenApiText(m: any): string {
+  return String(
+    m?.textMessage ||
+    m?.extendedTextMessage?.text ||
+    m?.extendedTextMessageData?.textMessage ||
+    m?.caption ||
+    m?.imageMessageData?.caption ||
+    m?.messageData?.textMessageData?.textMessage ||
+    m?.messageData?.extendedTextMessageData?.textMessage ||
+    m?.messageData?.imageMessageData?.caption ||
+    ''
+  ).trim();
+}
+
+// Logs Green API journal failures (401 bad token, 466 plan limit, 429) once per change, not once a minute.
+let lastJournalStatus = 0;
+function reportJournalStatus(status: number) {
+  if (status === lastJournalStatus) return;
+  lastJournalStatus = status;
+  if (status === 200) {
+    console.log('[WhatsApp Poll] Reading incoming WhatsApp messages from Green API.');
+  } else {
+    console.warn(`[WhatsApp Poll] Green API lastIncomingMessages answered HTTP ${status}; incoming reports are not being collected.`);
+  }
 }
 
 // Clean up old history records if they exceed 500 items
@@ -4302,46 +4114,34 @@ async function startServer() {
       const cleanMessage = messageText.trim().slice(0, 10000);
 
       // Check if message is a Management Sales Closing report from group "TFW Management Team"
-      const isMgmtGroupOrReport = 
-        detectedChatName.toLowerCase().includes('management team') || 
-        detectedChatName.toLowerCase().includes('tfw management') || 
-        isManagementSalesMessage(cleanMessage);
+      const isMgmtGroup =
+        detectedChatName.toLowerCase().includes('management team') ||
+        detectedChatName.toLowerCase().includes('tfw management');
 
-      if (isMgmtGroupOrReport) {
+      if (isManagementSalesMessage(cleanMessage)) {
+        const msgTime = Number(body.timestamp) > 0 ? new Date(Number(body.timestamp) * 1000) : new Date();
         const parsedReport = parseManagementReportText(cleanMessage, {
+          fallbackDate: getDhakaDateString(msgTime),
           senderName: senderName || 'TFW Management Team',
           senderPhone,
           groupName: 'TFW Management Team',
-          timestamp: new Date().toISOString()
+          timestamp: msgTime.toISOString()
         });
 
         if (parsedReport) {
-          const db = loadDatabase();
-          if (!db.data) db.data = {};
-          if (!db.data.whatsappManagementReports) db.data.whatsappManagementReports = {};
-          db.data.whatsappManagementReports[parsedReport.date] = parsedReport;
-
-          saveDatabaseToDisk({
-            type: 'set',
-            path: `data/whatsappManagementReports/${parsedReport.date}`,
-            value: parsedReport,
-            senderId: 'whatsapp-mgmt-sync'
-          }, true);
-
-          broadcastMutation({
-            type: 'whatsapp-management-report-received',
-            report: parsedReport,
-            date: parsedReport.date
-          });
-
-          console.log(`[WhatsApp Sync] Successfully parsed and stored daily closing report for date: ${parsedReport.date} (Total: ${parsedReport.salesAndRevenue.totalRevenue})`);
+          const stored = storeManagementReport(parsedReport, 'webhook');
           return res.status(200).json({
-            status: 'success',
+            status: stored ? 'success' : 'unchanged',
             reportType: 'management-closing-sales',
             date: parsedReport.date,
             totalRevenue: parsedReport.salesAndRevenue.totalRevenue
           });
         }
+      }
+
+      // Other chatter in the management group is neither a sales report nor a maintenance issue.
+      if (isMgmtGroup) {
+        return res.status(200).json({ status: 'ignored', reason: 'Management group message is not a closing report' });
       }
 
       // User directive: synced with WhatsApp group "TFW Issue Resolve (Tech+ Guest Feedback)"
@@ -4868,27 +4668,11 @@ async function startServer() {
       timestamp: new Date().toISOString()
     });
 
-    if (!parsedReport) {
-      return res.status(422).json({ error: 'Could not parse closing report from the provided text' });
+    if (!parsedReport || (parsedReport.counterBreakdown.length === 0 && !parsedReport.salesAndRevenue.totalRevenue)) {
+      return res.status(422).json({ error: 'Could not find any counter or revenue amounts in the pasted text' });
     }
 
-    const db = loadDatabase();
-    if (!db.data) db.data = {};
-    if (!db.data.whatsappManagementReports) db.data.whatsappManagementReports = {};
-    db.data.whatsappManagementReports[parsedReport.date] = parsedReport;
-
-    saveDatabaseToDisk({
-      type: 'set',
-      path: `data/whatsappManagementReports/${parsedReport.date}`,
-      value: parsedReport,
-      senderId: 'mgmt-portal-import'
-    }, true);
-
-    broadcastMutation({
-      type: 'whatsapp-management-report-received',
-      report: parsedReport,
-      date: parsedReport.date
-    });
+    storeManagementReport(parsedReport, 'manual paste');
 
     return res.status(200).json({
       status: 'success',
@@ -5183,13 +4967,14 @@ async function startServer() {
         const minutesToFetch = force ? 1440 : 240;
         const incomingUrl = `https://api.green-api.com/waInstance${idInstance}/lastIncomingMessages/${apiTokenInstance}?minutes=${minutesToFetch}`;
         const res = await fetch(incomingUrl);
+        reportJournalStatus(res.status);
         if (res.ok) {
           const list = await res.json();
           if (Array.isArray(list)) {
             for (const m of list) {
               if (m) {
                 const cId = String(m.chatId || '');
-                const textPreview = String(m.textMessage || m.extendedTextMessage?.text || m.caption || '');
+                const textPreview = extractGreenApiText(m);
                 const isMgmt = cId.toLowerCase().includes('management') || String(m.chatName || '').toLowerCase().includes('management') || isManagementSalesMessage(textPreview);
                 if (cId === targetGroupId || cId.includes('120363024724303859') || isMgmt) {
                   m._sourceChatId = isMgmt ? 'TFW Management Team' : targetGroupId;
@@ -5203,8 +4988,8 @@ async function startServer() {
         console.error('[WhatsApp Sync] Error querying lastIncomingMessages:', e);
       }
 
-      // 2. Secondary fallback: getChatHistory (only when manually triggered or when lastIncomingMessages is empty)
-      if (force || allIncomingMessages.length === 0) {
+      // 2. Secondary source: getChatHistory, only on a manual refresh (the background poll would hit its 1-per-second limit for nothing)
+      if (force) {
         try {
           const historyUrl = `https://api.green-api.com/waInstance${idInstance}/getChatHistory/${apiTokenInstance}`;
           const res = await fetch(historyUrl, {
@@ -5276,19 +5061,7 @@ async function startServer() {
           continue;
         }
 
-        // Extract text thoroughly from various Green API message shapes
-        const cleanMessage = String(
-          m.textMessage ||
-          m.extendedTextMessage?.text ||
-          m.extendedTextMessageData?.textMessage ||
-          m.caption ||
-          m.imageMessageData?.caption ||
-          m.quotedMessage?.textMessage ||
-          m.messageData?.textMessageData?.textMessage ||
-          m.messageData?.extendedTextMessageData?.textMessage ||
-          m.messageData?.imageMessageData?.caption ||
-          ''
-        ).trim();
+        const cleanMessage = extractGreenApiText(m);
 
         if (!cleanMessage) {
           continue;
@@ -5296,6 +5069,9 @@ async function startServer() {
 
         // Check if message is a Management Sales Closing report from group "TFW Management Team"
         if (isManagementSalesMessage(cleanMessage)) {
+          if (!force && processedWhatsAppMessageIds.has(idMessage)) {
+            continue;
+          }
           const senderNameRaw = String(
             m.senderContactName ||
             m.senderName ||
@@ -5307,6 +5083,7 @@ async function startServer() {
           const msgTimeRaw = m.timestamp ? new Date(m.timestamp * 1000) : new Date();
 
           const parsedReport = parseManagementReportText(cleanMessage, {
+            fallbackDate: getDhakaDateString(msgTimeRaw),
             senderName: senderNameRaw,
             senderPhone: senderPhoneRaw,
             groupName: 'TFW Management Team',
@@ -5314,24 +5091,7 @@ async function startServer() {
           });
 
           if (parsedReport) {
-            const dbRef = loadDatabase();
-            if (!dbRef.data) dbRef.data = {};
-            if (!dbRef.data.whatsappManagementReports) dbRef.data.whatsappManagementReports = {};
-            dbRef.data.whatsappManagementReports[parsedReport.date] = parsedReport;
-
-            saveDatabaseToDisk({
-              type: 'set',
-              path: `data/whatsappManagementReports/${parsedReport.date}`,
-              value: parsedReport,
-              senderId: 'whatsapp-mgmt-sync'
-            }, true);
-
-            broadcastMutation({
-              type: 'whatsapp-management-report-received',
-              report: parsedReport,
-              date: parsedReport.date
-            });
-            console.log(`[Green-API Management Ingested] Date: ${parsedReport.date}, Total Revenue: ${parsedReport.salesAndRevenue?.totalRevenue}`);
+            storeManagementReport(parsedReport, force ? 'manual WhatsApp sync' : 'WhatsApp poll');
           }
           markWhatsAppMessageProcessed(idMessage);
           continue;
@@ -6159,6 +5919,26 @@ async function startServer() {
       }
     });
   }, 8000);
+
+  // Without a Green API webhook pointing at this server, polling is the only way the nightly sales report and the
+  // technicians' replies in the WhatsApp groups reach the app.
+  if (GREEN_API_ENV_TOKEN_INSTANCE && process.env.WHATSAPP_POLL_DISABLED !== '1') {
+    let pollRunning = false;
+    const pollWhatsApp = async () => {
+      if (pollRunning) return;
+      pollRunning = true;
+      try {
+        const result = await syncGreenApiGroupMessages(false);
+        if (!result.success && result.error) console.warn(`[WhatsApp Poll] ${result.error}`);
+      } catch (err) {
+        console.warn('[WhatsApp Poll] failed:', err);
+      } finally {
+        pollRunning = false;
+      }
+    };
+    setTimeout(pollWhatsApp, 15 * 1000);
+    setInterval(pollWhatsApp, 60 * 1000);
+  }
 
   // Periodic SQLite WAL Checkpoint every 5 minutes to prevent disk growth & keep database compact
   setInterval(() => {

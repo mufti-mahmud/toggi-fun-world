@@ -749,30 +749,11 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
     return Array.from(map.values());
   }, [maintenanceTickets, todayStr]);
 
-  // Compute smart initial date range based on earliest/latest ticket or active operational dates
-  const { minTicketDate, maxTicketDate } = useMemo(() => {
-    if (allTicketsFlat.length === 0) {
-      return {
-        minTicketDate: getDhakaDateOffset(selectedDate || todayStr, 29),
-        maxTicketDate: selectedDate || todayStr
-      };
-    }
-    let minD = '9999-99-99';
-    let maxD = '0000-00-00';
-    allTicketsFlat.forEach(t => {
-      const { solvedDate, reportedDate } = extractTicketDates(t, todayStr);
-      const d = t.status === 'solved' ? solvedDate : reportedDate;
-      if (d && d < minD) minD = d;
-      if (d && d > maxD) maxD = d;
-    });
-    if (minD === '9999-99-99') minD = getDhakaDateOffset(todayStr, 29);
-    if (maxD === '0000-00-00') maxD = todayStr;
-    return { minTicketDate: minD, maxTicketDate: maxD > todayStr ? maxD : todayStr };
-  }, [allTicketsFlat, selectedDate, todayStr]);
-
   // Date Range & Filter States
-  const [startDate, setStartDate] = useState<string>(() => minTicketDate);
-  const [endDate, setEndDate] = useState<string>(() => maxTicketDate);
+  // Empty bounds mean all time, the same as the "All" preset. A range taken from the tickets on first render froze
+  // before they had loaded, so tickets solved later fell outside it and Total Solved showed 0.
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [activePreset, setActivePreset] = useState<string>('all');
   const [creditMode, setCreditMode] = useState<'team' | 'primary'>('team'); // 'team' credits both Lead & Assisted, 'primary' credits only Lead
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');

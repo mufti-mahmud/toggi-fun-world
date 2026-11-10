@@ -298,6 +298,7 @@ export interface AssignmentLockRecord {
 
 export interface ManagementCounterBreakdown {
   counterName: string; // e.g. 'Level 10', 'Level 8', 'Level 9', 'Level 11'
+  details?: string; // rest of the header line, e.g. '(counter 01) Entry counter', 'VR zone'
   individualSales: number; // e.g. 22650
   kiddoPackRatio: number; // e.g. 1100
   xtremePackRatio: number; // e.g. 10500
