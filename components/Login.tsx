@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Operator, AppConfig } from '../types';
+import { PasswordInput } from './PasswordInput';
 import { Shield, Users, KeyRound, Wrench, Smartphone, Sparkles, UserCheck, Briefcase, Eye, EyeOff, Lock, HeartHandshake, BarChart3, Maximize2, Minimize2, Tv } from 'lucide-react';
 import { 
   unlockAudio, 
@@ -864,8 +865,9 @@ const Login: React.FC<Props> = ({
                     <label className="block text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-1">
                       Confirm Password
                     </label>
-                    <input 
-                      type={showPassword ? 'text' : 'password'}
+                    <PasswordInput
+                      visible={showPassword}
+                      onVisibleChange={setShowPassword}
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       className="w-full bg-gray-900 text-white rounded-xl p-3 text-sm border border-gray-700 focus:border-amber-400 outline-none transition-colors"
@@ -952,8 +954,9 @@ const Login: React.FC<Props> = ({
                     <label className="block text-[11px] font-semibold text-gray-300 uppercase tracking-wider mb-1">
                       Confirm New Password
                     </label>
-                    <input 
-                      type={showPassword ? 'text' : 'password'}
+                    <PasswordInput
+                      visible={showPassword}
+                      onVisibleChange={setShowPassword}
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       className="w-full bg-gray-900 text-white rounded-xl p-3 text-sm border border-gray-700 focus:border-emerald-400 outline-none transition-colors"

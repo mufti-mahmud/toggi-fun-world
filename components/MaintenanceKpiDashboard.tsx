@@ -40,6 +40,7 @@ import {
   Settings2,
   X
 } from 'lucide-react';
+import { PasswordInput } from './PasswordInput';
 
 export interface TechnicalCategoryDef {
   id: string;
@@ -1471,8 +1472,7 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
               <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
                 KPI Dashboard Password
               </label>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 value={inputPassword}
                 onChange={e => setInputPassword(e.target.value)}

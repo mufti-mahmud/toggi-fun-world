@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { KeyRound, Loader2, X } from 'lucide-react';
+import { PasswordInput } from './PasswordInput';
 
 interface BackupPasswordModalProps {
   isOpen: boolean;
@@ -97,10 +98,9 @@ export const BackupPasswordModal: React.FC<BackupPasswordModalProps> = ({
         </div>
 
         <label htmlFor="backup-password" className="block mt-5 mb-1.5 text-sm font-medium text-gray-300">Backup password</label>
-        <input
+        <PasswordInput
           id="backup-password"
           ref={inputRef}
-          type="password"
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}

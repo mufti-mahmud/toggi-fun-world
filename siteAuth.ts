@@ -206,7 +206,14 @@ const LOGIN_PAGE_HTML = `<!DOCTYPE html>
   h1{font-size:1.25rem;margin:0 0 4px;text-align:center}
   p.sub{margin:0 0 24px;text-align:center;color:#94a3b8;font-size:.9rem}
   label{display:block;font-size:.875rem;margin-bottom:6px;color:#cbd5e1}
-  input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid #334155;background:#0a192f;color:#f1f5f9;font-size:1rem}
+  .field{position:relative}
+  input{width:100%;padding:12px 46px 12px 14px;border-radius:10px;border:1px solid #334155;background:#0a192f;color:#f1f5f9;font-size:1rem}
+  .eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;margin:0;padding:0;display:flex;align-items:center;justify-content:center;background:transparent;border:0;border-radius:8px;color:#94a3b8;cursor:pointer}
+  .eye:hover{background:transparent;color:#e2e8f0}
+  .eye svg{width:20px;height:20px}
+  .eye .off{display:none}
+  .eye[aria-pressed="true"] .on{display:none}
+  .eye[aria-pressed="true"] .off{display:block}
   input:focus{outline:2px solid #6366f1;outline-offset:1px;border-color:#6366f1}
   button{width:100%;margin-top:16px;padding:12px;border:0;border-radius:10px;background:#4f46e5;color:#fff;font-size:1rem;font-weight:600;cursor:pointer}
   button:hover{background:#4338ca}
@@ -223,7 +230,13 @@ const LOGIN_PAGE_HTML = `<!DOCTYPE html>
   <p class="sub">Staff access only. Enter the site password to continue.</p>
   <form id="form" novalidate>
     <label for="password">Site password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+    <div class="field">
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button id="toggle" class="eye" type="button" aria-label="Show password" aria-pressed="false" title="Show password">
+        <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/></svg>
+      </button>
+    </div>
     <button id="submit" type="submit">Sign in</button>
     <p id="error" role="alert" aria-live="assertive"></p>
   </form>
@@ -234,6 +247,16 @@ const LOGIN_PAGE_HTML = `<!DOCTYPE html>
     var input = document.getElementById('password');
     var button = document.getElementById('submit');
     var error = document.getElementById('error');
+    var toggle = document.getElementById('toggle');
+    toggle.addEventListener('click', function () {
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      toggle.setAttribute('aria-pressed', show ? 'true' : 'false');
+      var label = show ? 'Hide password' : 'Show password';
+      toggle.setAttribute('aria-label', label);
+      toggle.title = label;
+      input.focus();
+    });
     function nextPath() {
       var next = new URLSearchParams(location.search).get('next') || '/';
       return next.charAt(0) === '/' && next.charAt(1) !== '/' && next.charAt(1) !== '\\\\' ? next : '/';

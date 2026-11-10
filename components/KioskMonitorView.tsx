@@ -17,6 +17,7 @@ import {
   Building2,
   LogOut
 } from 'lucide-react';
+import { PasswordInput } from './PasswordInput';
 import {
   ENLISTED_CATALOG,
   EnlistedItem,
@@ -927,8 +928,7 @@ export const KioskMonitorView: React.FC<KioskMonitorViewProps> = ({ onLogout, ap
                 <label className="block text-xs font-bold text-amber-300 uppercase mb-1">
                   Password *
                 </label>
-                <input
-                  type="password"
+                <PasswordInput
                   required
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
