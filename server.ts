@@ -43,6 +43,8 @@ const WHATSAPP_WEBHOOK_SECRET = String(process.env.WHATSAPP_WEBHOOK_SECRET || ''
 const GREEN_API_ENV_ID_INSTANCE = String(process.env.GREEN_API_ID_INSTANCE || '').trim();
 const GREEN_API_ENV_TOKEN_INSTANCE = String(process.env.GREEN_API_TOKEN_INSTANCE || '').trim();
 const WHAPI_ENV_TOKEN = String(process.env.WHAPI_API_TOKEN || '').trim();
+// Green API's free Developer plan allows 1,000 lastIncomingMessages calls a month, so the background poll stays rare.
+const WHATSAPP_POLL_INTERVAL_MINUTES = Math.max(5, Number(process.env.WHATSAPP_POLL_INTERVAL_MINUTES) || 120);
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
@@ -4964,7 +4966,8 @@ async function startServer() {
 
       // 1. Primary method: lastIncomingMessages (high performance, no 429 rate limit)
       try {
-        const minutesToFetch = force ? 1440 : 240;
+        // The window spans two poll intervals so one failed poll loses nothing; the journal keeps 24 hours.
+        const minutesToFetch = force ? 1440 : Math.min(1440, Math.max(240, WHATSAPP_POLL_INTERVAL_MINUTES * 2));
         const incomingUrl = `https://api.green-api.com/waInstance${idInstance}/lastIncomingMessages/${apiTokenInstance}?minutes=${minutesToFetch}`;
         const res = await fetch(incomingUrl);
         reportJournalStatus(res.status);
@@ -5937,7 +5940,7 @@ async function startServer() {
       }
     };
     setTimeout(pollWhatsApp, 15 * 1000);
-    setInterval(pollWhatsApp, 60 * 1000);
+    setInterval(pollWhatsApp, WHATSAPP_POLL_INTERVAL_MINUTES * 60 * 1000);
   }
 
   // Periodic SQLite WAL Checkpoint every 5 minutes to prevent disk growth & keep database compact
