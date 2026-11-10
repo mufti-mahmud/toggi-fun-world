@@ -1,0 +1,28 @@
+{
+  "name": "tfw-ticket-sales-api",
+  "version": "1.0.0",
+  "description": "Standalone Production Ticket Sales, Turnstile & POS REST API for Toggi Fun World",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "ticket-sales",
+    "turnstiles",
+    "pos",
+    "api",
+    "dotnet",
+    "theme-park"
+  ],
+  "author": "Tanvir Bashundhara Group",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

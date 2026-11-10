@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+dist
+dotnet-client
+.env*
+!.env.example
+*.log
+.git
+parkManagement/.aistudio
+public/assets/aistudio/*.zip
+data/*.tmp.*
