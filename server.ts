@@ -6093,7 +6093,7 @@ async function startServer() {
   } else {
     const distPath = fs.existsSync(path.join(process.cwd(), 'dist'))
       ? path.join(process.cwd(), 'dist')
-      : path.resolve(__dirname, '.');
+      : path.join(import.meta.dirname, 'dist');
 
     // Cache immutable assets for 1 year for instantaneous 0.2s reloads
     const assetsDir = path.join(distPath, 'assets');

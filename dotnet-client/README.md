@@ -56,6 +56,26 @@ public class TurnstileController : ControllerBase
 
 ---
 
+## 🔑 Configuration
+
+The server accepts machine clients only with its `TICKET_API_KEY`. Set these on the machine that runs the client:
+
+| Variable | Value |
+|---|---|
+| `TFW_TICKET_API_KEY` | The server's `TICKET_API_KEY` (required) |
+| `TFW_TICKET_API_URL` | Server address (default: `https://p01--tfw--tm5ccs4zwdnq.code.run`) |
+
+PowerShell, for the current Windows user (restart the app or terminal afterwards):
+
+```powershell
+[Environment]::SetEnvironmentVariable('TFW_TICKET_API_KEY', '<key>', 'User')
+[Environment]::SetEnvironmentVariable('TFW_TICKET_API_URL', 'https://p01--tfw--tm5ccs4zwdnq.code.run', 'User')
+```
+
+The demo in `Program.cs` records a sale and a refund, so it changes real counts on the server it points at.
+
+---
+
 ## 🛠️ Code Examples
 
 ### 1. Record Ticket Sale / Turnstile Entry

@@ -14,10 +14,18 @@ namespace Tfw.TicketSales.Demo
             Console.WriteLine("=============================================================\n");
 
             // 1. Initialize Options (Can point to local Standalone API or Cloud App URL)
+            var apiKey = Environment.GetEnvironmentVariable("TFW_TICKET_API_KEY");
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                Console.WriteLine("TFW_TICKET_API_KEY is not set. Set it to the server's TICKET_API_KEY and run again.");
+                Environment.ExitCode = 1;
+                return;
+            }
+
             var options = new TfwTicketApiOptions
             {
-                BaseUrl = "https://ais-pre-yh2u4e4b5lyucgbmyxk2sv-662885913055.asia-southeast1.run.app", // or "http://localhost:5000"
-                ApiKey = Environment.GetEnvironmentVariable("TFW_TICKET_API_KEY") ?? "",
+                BaseUrl = Environment.GetEnvironmentVariable("TFW_TICKET_API_URL") ?? "https://p01--tfw--tm5ccs4zwdnq.code.run",
+                ApiKey = apiKey,
                 DefaultSenderName = "Bashundhara Gate 1 .NET Turnstile Controller"
             };
 

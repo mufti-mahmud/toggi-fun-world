@@ -6,7 +6,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SESSION_DAYS = 30;
 const REFRESH_BELOW_DAYS = 15;
 const MAX_FAILED_ATTEMPTS = 10;
-const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 
 // Files the browser fetches without cookies (manifest) or that the login page and notifications need.
 const PUBLIC_PATHS = new Set(['/api/health', '/manifest.json', '/sw.js', '/tbg-logo.svg', '/bcdl-logo.svg']);
@@ -227,7 +227,7 @@ const LOGIN_PAGE_HTML = `<!DOCTYPE html>
       }).then(function (res) {
         if (res.ok) { location.replace(nextPath()); return; }
         error.textContent = res.status === 429
-          ? 'Too many attempts. Wait 15 minutes and try again.'
+          ? 'Too many attempts. Wait 10 minutes and try again.'
           : 'Wrong password. Try again.';
         input.select();
       }).catch(function () {
