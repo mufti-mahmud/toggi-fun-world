@@ -21,6 +21,9 @@ import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkp
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
 import { isManagementSalesMessage, parseManagementReportText } from './utils/whatsappManagementParser';
 import { createSiteAuth, readApiKey, safeEqual, clientIp, createAttemptLimiter } from './siteAuth';
+import { format as formatLogArgs } from 'node:util';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { initActivityLog, logActivity, flushActivityLog, readActivityDay, iterateActivityDay, summarizeActivityDay, listActivityDays, activityCsvRow, ACTIVITY_CSV_HEADER, ACTIVITY_PAGE_SIZE, suppressedActivityRows, dhakaDay } from './activityLog';
 
 // Ensure production mode if running from compiled server.cjs bundle
 if (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) {
@@ -469,15 +472,21 @@ function loadDatabase(): any {
       console.warn('SQLite initial load attempt:', sqliteErr);
     }
 
-    let targetFileToRead = DB_FILE;
-    if (!fs.existsSync(DB_FILE) && fs.existsSync(`${DB_FILE}.backup`)) {
-      targetFileToRead = `${DB_FILE}.backup`;
-    }
+    // database.json can be empty or cut short after an interrupted write; the rotating backup is then the newest
+    // readable copy. Falling through to a blank database here would be saved over the real data.
+    const readJsonDb = (file: string) => {
+      try {
+        const text = fs.readFileSync(file, 'utf-8');
+        return text.trim() ? JSON.parse(text) : null;
+      } catch (_) {
+        return null;
+      }
+    };
+    const parsedFromDisk = readJsonDb(DB_FILE) || readJsonDb(`${DB_FILE}.backup`);
 
-    if (fs.existsSync(targetFileToRead)) {
-      const fileData = fs.readFileSync(targetFileToRead, 'utf-8');
-      const parsed = JSON.parse(fileData);
-      
+    if (parsedFromDisk) {
+      const parsed = parsedFromDisk;
+
       // Ensure basic structure without overwriting existing data or user deletions
       if (!parsed.config || typeof parsed.config !== 'object') parsed.config = {};
       if (!parsed.data || typeof parsed.data !== 'object') parsed.data = {};
@@ -668,6 +677,19 @@ function loadDatabase(): any {
     console.error('Error reading database file, creating fresh initial db:', err);
   }
 
+  // The blank database below is saved over tfw.db, so keep a copy of a tfw.db that exists but could not be read.
+  for (const name of ['tfw.db', 'tfw.db-wal']) {
+    try {
+      const file = path.join(DATA_DIR, name);
+      if (fs.existsSync(file) && fs.statSync(file).size > 0) {
+        const copy = path.join(DATA_DIR, `${name}.unreadable-${Date.now()}`);
+        fs.copyFileSync(file, copy);
+        console.error(`⚠️ ${name} could not be loaded; a copy was kept at ${copy} before starting with a blank database.`);
+      }
+    } catch (copyErr) {
+      console.error(`Could not keep a copy of ${name}:`, copyErr);
+    }
+  }
   memoryDb = getInitialDatabase();
   saveDatabaseToDisk();
   return memoryDb;
@@ -714,6 +736,9 @@ export const concurrencyMetrics = {
   activeClientsCount: 0
 };
 
+// Counters behind the 5-minute "health" entry in the activity log; reset after each entry.
+const healthWindow = { requests: 0, healthChecks: 0, fullDownloads: 0, writes: 0, errors: 0, refused: 0, slow: 0, totalMs: 0, maxMs: 0, flushes: 0, flushMs: 0, lastSnapshotBytes: 0 };
+
 // Operations monitor rolling window
 let opsCounter = 0;
 setInterval(() => {
@@ -738,16 +763,21 @@ function executeDiskFlush() {
 
   // Execute on next tick so in-flight HTTP requests and SSE dispatches are processed without blocking
   setImmediate(() => {
+    const flushStarted = Date.now();
     try {
-      const serialized = JSON.stringify(memoryDb, null, 2);
+      // Compact JSON: same content, less CPU on the 0.2-core server and a smaller file.
+      const serialized = JSON.stringify(memoryDb);
       const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
       fs.writeFileSync(tempFile, serialized, 'utf-8');
       fs.renameSync(tempFile, DB_FILE);
 
-      // Rotating backup every 10 flushes
+      // Rotating backup every 10 flushes, through a temp file so an interrupted write cannot leave it cut short.
       if (concurrencyMetrics.successfulDiskFlushes % 10 === 0) {
-        fs.writeFileSync(`${DB_FILE}.backup`, serialized, 'utf-8');
+        const backupTemp = `${DB_FILE}.backup.tmp`;
+        fs.writeFileSync(backupTemp, serialized, 'utf-8');
+        fs.renameSync(backupTemp, `${DB_FILE}.backup`);
       }
+      healthWindow.lastSnapshotBytes = serialized.length;
 
       // Synchronous atomic write to SQLite database
       try {
@@ -758,6 +788,8 @@ function executeDiskFlush() {
 
       concurrencyMetrics.successfulDiskFlushes++;
       lastFlushTime = Date.now();
+      healthWindow.flushes++;
+      healthWindow.flushMs += lastFlushTime - flushStarted;
     } catch (e) {
       console.error('Failed to write database to disk safely:', e);
     } finally {
@@ -804,26 +836,47 @@ function scheduleDiskFlush(immediate: boolean = false) {
   }
 }
 
-// Clean process exit flushes
-process.on('SIGINT', () => {
+// On shutdown SQLite (the primary store) is saved first, and database.json goes through a temp file: the platform can
+// kill the process mid-write, which used to leave database.json empty and skip the SQLite save.
+function flushOnExit() {
   try {
     if (memoryDb) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(memoryDb, null, 2), 'utf-8');
-      saveToSqlite(memoryDb);
+      try { saveToSqlite(memoryDb); } catch (_) {}
+      const tempFile = `${DB_FILE}.tmp.exit`;
+      fs.writeFileSync(tempFile, JSON.stringify(memoryDb), 'utf-8');
+      fs.renameSync(tempFile, DB_FILE);
     }
   } catch (_) {}
+  try {
+    logActivity('system', 'server stopping');
+    flushActivityLog();
+  } catch (_) {}
   process.exit(0);
-});
+}
+process.on('SIGINT', flushOnExit);
+process.on('SIGTERM', flushOnExit);
 
-process.on('SIGTERM', () => {
-  try {
-    if (memoryDb) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(memoryDb, null, 2), 'utf-8');
-      saveToSqlite(memoryDb);
-    }
-  } catch (_) {}
-  process.exit(0);
-});
+// Activity log entry for one save: the app's own history records become "user" entries (who did what), everything
+// else a "data" entry with the changed paths and values (photos shortened to their size).
+function logDataChange(mutation?: ServerMutationEvent) {
+  const m: any = mutation || { type: 'sync' };
+  const paths: string[] = typeof m.path === 'string' ? [m.path] : (m.updates && typeof m.updates === 'object' ? Object.keys(m.updates) : []);
+  const valueAt = (p: string) => (typeof m.path === 'string' ? m.value : m.updates?.[p]);
+  for (const p of paths) {
+    if (!p.startsWith('data/historyLog/')) continue;
+    const entry = valueAt(p);
+    if (entry && typeof entry === 'object') logActivity('user', String(entry.action || 'ACTION'), { actor: String(entry.user || ''), detail: entry.details });
+  }
+  const dataPaths = paths.filter(p => !p.startsWith('data/historyLog/'));
+  if (paths.length > 0 && dataPaths.length === 0) return;
+  const detail: Record<string, unknown> = {};
+  if (dataPaths.length) detail.paths = dataPaths.slice(0, 30);
+  if (dataPaths.length && dataPaths.length <= 10) detail.values = Object.fromEntries(dataPaths.map(p => [p, valueAt(p)]));
+  for (const k of ['date', 'rideId', 'category', 'newPkg', 'newTkt', 'newTotal', 'delta', 'ticketId', 'cutoffDate']) {
+    if (m[k] !== undefined) detail[k] = m[k];
+  }
+  logActivity('data', String(m.type || 'save'), { actor: String(m.senderId || ''), detail });
+}
 
 function saveDatabaseToDisk(mutation?: ServerMutationEvent, immediate: boolean = false) {
   if (!memoryDb) return;
@@ -832,6 +885,7 @@ function saveDatabaseToDisk(mutation?: ServerMutationEvent, immediate: boolean =
   concurrencyMetrics.operationsTotal++;
   opsCounter++;
   concurrencyMetrics.lastOperationTime = Date.now();
+  try { logDataChange(mutation); } catch (_) {}
 
   // 1. Instant Real-Time SSE broadcast to all connected clients (0ms latency!)
   broadcastMutation(mutation || { type: 'sync' });
@@ -876,12 +930,19 @@ function broadcastMutation(mutation: ServerMutationEvent) {
 
 // Saves a nightly "TFW Total Cash Collection" report. Polling sees the same message for hours, and a later
 // correction (or a manual paste) must not be replaced by an older copy, so only a newer, different message wins.
-function storeManagementReport(report: any, source: string): boolean {
+function storeManagementReport(report: any, source: string, { manual = false } = {}): boolean {
   const db = loadDatabase();
   if (!db.data) db.data = {};
   if (!db.data.whatsappManagementReports) db.data.whatsappManagementReports = {};
+  // Chat in the management group can mention "kiddo package" and "total revenue" without any amounts.
+  if (!reportHasAmounts(report)) {
+    console.log(`[Management Report] ${source}: ignored a message for ${report.date} with no amounts in it`);
+    logActivity('whatsapp', 'report ignored: no amounts', { detail: { date: report.date, source, sender: report.senderName } });
+    return false;
+  }
   const existing = db.data.whatsappManagementReports[report.date];
-  if (existing) {
+  // Demo reports written by an earlier build (fixed sender 8801700000000) give way to any real report.
+  if (existing && existing.senderPhone !== SEEDED_REPORT_PHONE && !manual) {
     if (existing.rawMessage === report.rawMessage) return false;
     const existingTime = Date.parse(existing.timestamp || '');
     const newTime = Date.parse(report.timestamp || '');
@@ -900,7 +961,16 @@ function storeManagementReport(report: any, source: string): boolean {
     date: report.date
   });
   console.log(`[Management Report] ${source}: stored ${report.date}, total revenue ${report.salesAndRevenue?.totalRevenue}, ${report.counterBreakdown?.length || 0} counters`);
+  logActivity('whatsapp', 'report stored', { actor: String(report.senderName || ''), detail: { date: report.date, source, totalRevenue: report.salesAndRevenue?.totalRevenue, footFall: report.salesAndRevenue?.totalFootFall, counters: report.counterBreakdown?.length || 0, replacedDemoReport: existing?.senderPhone === SEEDED_REPORT_PHONE } });
   return true;
+}
+
+const SEEDED_REPORT_PHONE = '8801700000000';
+
+function reportHasAmounts(report: any): boolean {
+  const s = report?.salesAndRevenue || {};
+  if (Array.isArray(report?.counterBreakdown) && report.counterBreakdown.length > 0) return true;
+  return [s.totalRevenue, s.toggiKiddoSale, s.toggiXtremeSale, s.totalFootFall, s.kiddoPackageSold, s.xtremePackageSold].some(v => Number(v) > 0);
 }
 
 // Text of a Green API message in either the journal shape (lastIncomingMessages / getChatHistory) or the webhook shape.
@@ -923,6 +993,7 @@ let lastJournalStatus = 0;
 function reportJournalStatus(status: number) {
   if (status === lastJournalStatus) return;
   lastJournalStatus = status;
+  logActivity('whatsapp', 'Green API journal status changed', { level: status === 200 ? 'info' : 'warn', detail: { httpStatus: status } });
   if (status === 200) {
     console.log('[WhatsApp Poll] Reading incoming WhatsApp messages from Green API.');
   } else {
@@ -1130,6 +1201,19 @@ function setValueByPath(obj: any, pathStr: string, value: any, isExplicitReopen:
 }
 
 async function startServer() {
+  initActivityLog(DATA_DIR, [
+    GREEN_API_ENV_TOKEN_INSTANCE, WHAPI_ENV_TOKEN, TICKET_API_MASTER_KEY, WHATSAPP_WEBHOOK_SECRET,
+    String(process.env.SITE_PASSWORD || ''), String(process.env.BACKUP_PASSWORD || ''), String(process.env.SESSION_SECRET || '')
+  ]);
+  // Every server error and warning also lands in the activity log, so a day's problems can be read back later.
+  for (const method of ['error', 'warn'] as const) {
+    const original = console[method].bind(console);
+    console[method] = (...args: any[]) => {
+      original(...args);
+      try { logActivity('server', method === 'error' ? 'error' : 'warning', { level: method === 'error' ? 'error' : 'warn', detail: formatLogArgs(...args) }); } catch (_) {}
+    };
+  }
+
   const app = express();
   app.use(cors());
 
@@ -1146,6 +1230,13 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  // Broken or oversized request bodies are answered here, before the login check, without a server error entry.
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err && (err.type === 'entity.parse.failed' || err.type === 'entity.too.large')) {
+      return res.status(err.type === 'entity.too.large' ? 413 : 400).json({ error: err.type === 'entity.too.large' ? 'request_too_large' : 'invalid_json' });
+    }
+    next(err);
+  });
 
   // Global anti-cache middleware for all API endpoints to prevent mobile Safari/Chrome caching
   app.use('/api', (req, res, next) => {
@@ -1167,12 +1258,134 @@ async function startServer() {
       ? '🔒 SITE_PASSWORD is not set: every request except /api/health is refused until it is configured.'
       : '🔓 SITE_PASSWORD is not set: login gate disabled for local development.');
   }
+  // Times every request for the health sample. Requests that got past the login check and failed, were slow or were
+  // non-data writes also get a log row (data writes are logged per save); refused requests are only counted.
+  const DATA_WRITE_PATHS = new Set(['/api/db/set', '/api/db/update', '/api/db/increment', '/api/db/increment-ride-count', '/api/db/set-ride-count', '/api/db/remove', '/api/db/sync-queue']);
+  const RESPONSE_NOTE_PREFIXES = ['/api/webhooks/', '/api/whatsapp/', '/api/management/'];
+  app.use((req, res, next) => {
+    const started = process.hrtime.bigint();
+    let responseNote: Record<string, unknown> | undefined;
+    if (RESPONSE_NOTE_PREFIXES.some(p => req.path.startsWith(p))) {
+      const sendJson = res.json.bind(res);
+      res.json = ((body: any) => {
+        if (body && typeof body === 'object') responseNote = { status: body.status, reason: body.reason, error: body.error, date: body.date };
+        return sendJson(body);
+      }) as typeof res.json;
+    }
+    res.on('finish', () => {
+      const ms = Math.round(Number(process.hrtime.bigint() - started) / 1e6);
+      const isWrite = req.method !== 'GET' && req.method !== 'HEAD';
+      healthWindow.requests++;
+      healthWindow.totalMs += ms;
+      if (ms > healthWindow.maxMs) healthWindow.maxMs = ms;
+      if (req.path === '/api/health') healthWindow.healthChecks++;
+      else if (req.path === '/api/db' && !req.query.path) healthWindow.fullDownloads++;
+      else if (isWrite) healthWindow.writes++;
+      if (res.statusCode >= 500) healthWindow.errors++;
+      if (ms >= 1000) healthWindow.slow++;
+      if (!res.locals.passedSiteGate) { healthWindow.refused++; return; }
+      if (req.path === '/api/activity-log/client') return;
+      const notable = res.statusCode >= 400 || ms >= 1000 || (isWrite && !DATA_WRITE_PATHS.has(req.path));
+      if (!notable || (!req.path.startsWith('/api/') && res.statusCode < 500)) return;
+      logActivity('request', `${req.method} ${req.path}`, {
+        level: res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info',
+        actor: res.statusCode < 400 ? String((req.body && req.body.senderId) || '') : '',
+        detail: { status: res.statusCode, ms, ...(responseNote ? { response: responseNote } : {}) }
+      });
+    });
+    next();
+  });
+
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  loopDelay.enable();
+  let lastCpu = process.cpuUsage();
+  let lastSampleAt = Date.now();
+  setInterval(() => {
+    const cpu = process.cpuUsage(lastCpu);
+    lastCpu = process.cpuUsage();
+    const now = Date.now();
+    const mem = process.memoryUsage();
+    const w = healthWindow;
+    logActivity('health', '5-minute sample', {
+      detail: {
+        openTabs: sseClients.length,
+        requests: w.requests, healthChecks: w.healthChecks, fullDownloads: w.fullDownloads, writes: w.writes, serverErrors: w.errors, refusedRequests: w.refused, slowRequests: w.slow,
+        avgMs: w.requests ? Math.round(w.totalMs / w.requests) : 0, maxMs: w.maxMs,
+        cpuPercent: Math.round(((cpu.user + cpu.system) / 1000 / Math.max(1, now - lastSampleAt)) * 1000) / 10,
+        rssMB: Math.round(mem.rss / 1048576), heapMB: Math.round(mem.heapUsed / 1048576),
+        eventLoopP99Ms: Math.round(loopDelay.percentile(99) / 1e6), eventLoopMaxMs: Math.round(loopDelay.max / 1e6),
+        saves: w.flushes, avgSaveMs: w.flushes ? Math.round(w.flushMs / w.flushes) : 0, databaseKB: Math.round(w.lastSnapshotBytes / 1024),
+        rowsOverDailyLimit: suppressedActivityRows()
+      }
+    });
+    loopDelay.reset();
+    lastSampleAt = now;
+    Object.assign(healthWindow, { requests: 0, healthChecks: 0, fullDownloads: 0, writes: 0, errors: 0, refused: 0, slow: 0, totalMs: 0, maxMs: 0, flushes: 0, flushMs: 0 });
+  }, Math.max(10, Number(process.env.ACTIVITY_LOG_HEALTH_SECONDS) || 300) * 1000).unref();
+
   app.use(siteAuth.gate);
+  app.use((req, res, next) => { res.locals.passedSiteGate = true; next(); });
   siteAuth.registerRoutes(app);
 
   // 1. Load initial memory & local cache from SQLite
   loadDatabase();
   removeSecretsFromDatabase();
+  logActivity('system', 'server started', {
+    detail: { node: process.version, dbVersion: memoryDb?.version, whatsappPollMinutes: process.env.WHATSAPP_POLL_DISABLED === '1' ? 'off' : WHATSAPP_POLL_INTERVAL_MINUTES, webhookSecretSet: Boolean(WHATSAPP_WEBHOOK_SECRET) }
+  });
+
+  // Activity log, behind the site login. ?date=YYYY-MM-DD (Dhaka day, default today), &category=..., &format=csv.
+  // JSON comes in pages of ACTIVITY_PAGE_SIZE rows: pass ?after=<nextAfter> for the next one. CSV is the whole day.
+  const activityDay = (q: unknown) => (typeof q === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : dhakaDay());
+  app.get('/api/activity-log/days', (req, res) => {
+    res.json({ days: listActivityDays() });
+  });
+  app.get('/api/activity-log/summary', (req, res) => {
+    res.json(summarizeActivityDay(activityDay(req.query.date)));
+  });
+  app.get('/api/activity-log', (req, res) => {
+    const day = activityDay(req.query.date);
+    const category = typeof req.query.category === 'string' && /^[a-z-]{1,30}$/.test(req.query.category) ? req.query.category : undefined;
+    if (req.query.format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="tfw-activity-${day}${category ? `-${category}` : ''}.csv"`);
+      // Written in chunks so a large day never sits in memory as one string.
+      let chunk = ACTIVITY_CSV_HEADER;
+      for (const row of iterateActivityDay(day, category)) {
+        chunk += activityCsvRow(row);
+        if (chunk.length > 256 * 1024) { res.write(chunk); chunk = ''; }
+      }
+      return res.end(chunk);
+    }
+    const after = Math.max(0, Number(req.query.after) || 0);
+    const page = readActivityDay(day, category, after, ACTIVITY_PAGE_SIZE + 1);
+    const more = page.length > ACTIVITY_PAGE_SIZE;
+    const entries = (more ? page.slice(0, ACTIVITY_PAGE_SIZE) : page).map(({ id, ...rest }) => rest);
+    if (req.query.download === '1') res.setHeader('Content-Disposition', `attachment; filename="tfw-activity-${day}.json"`);
+    res.json({ day, count: entries.length, entries, ...(more ? { nextAfter: page[ACTIVITY_PAGE_SIZE - 1].id } : {}) });
+  });
+  // Browser errors from staff devices; capped per address and in total so a broken page cannot flood the log.
+  const clientReportCounts = new Map<string, { windowStart: number; count: number }>();
+  const allClientReports = { windowStart: 0, count: 0 };
+  app.post('/api/activity-log/client', (req, res) => {
+    const ip = clientIp(req);
+    const now = Date.now();
+    if (now - allClientReports.windowStart > 60000) Object.assign(allClientReports, { windowStart: now, count: 0 });
+    if (++allClientReports.count > 120) return res.status(429).json({ ok: false });
+    const slot = clientReportCounts.get(ip);
+    if (!slot || now - slot.windowStart > 60000) clientReportCounts.set(ip, { windowStart: now, count: 1 });
+    else if (++slot.count > 30) return res.status(429).json({ ok: false });
+    if (clientReportCounts.size > 1000) {
+      for (const [key, s] of clientReportCounts) if (now - s.windowStart > 60000) clientReportCounts.delete(key);
+    }
+    const b = req.body || {};
+    const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n);
+    logActivity('browser', clip(b.kind || 'error', 40), {
+      level: 'error',
+      detail: { message: clip(b.message, 500), source: clip(b.source, 200), line: Number(b.line) || undefined, col: Number(b.col) || undefined, stack: clip(b.stack, 1500), page: clip(b.page, 200), userAgent: clip(b.userAgent || req.headers['user-agent'], 200) }
+    });
+    res.json({ ok: true });
+  });
 
   // --- API Routes ---
   app.get('/api/health', (req, res) => {
@@ -4635,6 +4848,7 @@ async function startServer() {
     if (result.success && result.messageId) {
       markWhatsAppMessageProcessed(result.messageId);
       console.log(`[WhatsApp Resolution Sent] ${ticketId} for ${rideName} -> ${TFW_ISSUE_RESOLVE_GROUP_NAME} (${result.messageId})`);
+      logActivity('whatsapp', 'resolution message sent', { actor: String(technicianName || ''), detail: { ticketId, rideName, group: TFW_ISSUE_RESOLVE_GROUP_NAME, withPhoto: Boolean(photoData) } });
     } else if (!result.success && ticketId) {
       // Allow retry if send failed
       recentSolvedNotifications.delete(ticketId);
@@ -4674,7 +4888,8 @@ async function startServer() {
       return res.status(422).json({ error: 'Could not find any counter or revenue amounts in the pasted text' });
     }
 
-    storeManagementReport(parsedReport, 'manual paste');
+    // A deliberate paste always wins, including a re-paste of text an older build parsed differently.
+    storeManagementReport(parsedReport, 'manual paste', { manual: true });
 
     return res.status(200).json({
       status: 'success',
@@ -5137,6 +5352,10 @@ async function startServer() {
           ''
         );
 
+        // A technician's reply is applied once; reading the same journal again must not undo a later reopen.
+        if (quotedStanzaId && processedWhatsAppMessageIds.has(idMessage)) {
+          continue;
+        }
         if (quotedStanzaId) {
           const quotedExisting = findExistingMaintenanceTicket(db, '', quotedStanzaId, 0, '');
           if (quotedExisting) {
@@ -5328,6 +5547,8 @@ async function startServer() {
         }
         console.log(`[WhatsApp Sync Engine] Synchronized ${newTicketsCount} updates/new tickets from WhatsApp`);
       }
+
+      logActivity('whatsapp', force ? 'manual read' : 'automatic read', { detail: { messagesSeen: sortedMsgs.length, ticketChanges: newTicketsCount } });
 
       return { success: true, newTickets: newTicketsCount };
     } catch (err: any) {
