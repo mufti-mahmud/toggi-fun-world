@@ -1997,7 +1997,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
                   <div className="flex items-center justify-between text-[11px] font-bold text-emerald-400 px-1 uppercase tracking-wider">
                     <span>Closing Sales ({displayedSales.date})</span>
                     <span className="text-[10px] text-gray-400 font-mono">
-                      {displayedSales.isSingleDay ? 'Nightly 9PM+ BST' : 'Aggregated Range'}
+                      {displayedSales.isSingleDay ? 'Nightly 8:30 PM+ BST' : 'Aggregated Range'}
                     </span>
                   </div>
 

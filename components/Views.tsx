@@ -2696,15 +2696,14 @@ export const DailyRoster = ({
 
   const [saveAllFeedback, setSaveAllFeedback] = useState(false);
 
+  // Every +1, +5 and typed count is saved the moment it is entered. Re-sending this screen's numbers overwrote newer
+  // counts from other devices (tickets down to 0) whenever the screen had missed an update, so this only commits a
+  // number still being typed (leaving the box saves it) and confirms.
   const handleSaveAll = () => {
     if (myAssignments.length > 0) {
-      myAssignments.forEach(ride => {
-        const pkg = Number((ride as any).packageCount || 0);
-        const tkt = Number((ride as any).ticketCount || 0);
-        if (onPackageCountChange) onPackageCountChange(ride.id, pkg);
-        if (onTicketCountChange) onTicketCountChange(ride.id, tkt);
-        if (onCountChange) onCountChange(ride.id, (ride as any).count || (pkg + tkt));
-      });
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       setSaveAllFeedback(true);
       setTimeout(() => setSaveAllFeedback(false), 2500);
     }

@@ -24,6 +24,14 @@ export const DEFAULT_DELETED_WA_MSG_IDS: string[] = [];
 
 export const DEFAULT_DELETED_SIGNATURES: string[] = [];
 
+// Server message types that handleServerDelta applies to the cache from the message alone.
+const DELTA_APPLIED_TYPES = new Set([
+  'set', 'increment', 'ride-count-increment', 'ride-count-set', 'update', 'remove',
+  'delete-ticket', 'clear-reported-tickets', 'reset-day', 'clean-older-than', 'reset-cycle'
+]);
+const SETTLE_QUIET_MS = 15000;
+const SETTLE_MAX_WAIT_MS = 60000;
+
 type ValueCallback = (snapshot: { val: () => any }) => void;
 
 interface QueuedMutation {
@@ -55,6 +63,12 @@ class ServerDatabaseEngine {
   private dbVersion: number = 0;
   public clientId: string = 'cli_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now().toString(36);
   private syncDebounceTimer: any = null;
+  private settleTimer: any = null;
+  private settleDeadline = 0;
+  private lastForeignDeltaAt = 0;
+  // Set by this tab's own writes and echoes; cleared by a full download that started after them. While set, the
+  // tab's version number includes its own guesses, so a "next" version does not prove the screen matches the server.
+  private lastOwnWriteAt = 0;
   private reconnectTimer: any = null;
   private offlineQueue: QueuedMutation[] = [];
   private isFlushingQueue: boolean = false;
@@ -620,6 +634,7 @@ class ServerDatabaseEngine {
       } catch (_) {}
       if (msg.senderId && msg.senderId === this.clientId) {
         if (msg.version) this.dbVersion = Math.max(this.dbVersion, msg.version);
+        this.lastOwnWriteAt = Date.now();
         return;
       }
     }
@@ -627,11 +642,13 @@ class ServerDatabaseEngine {
     // Echo suppression: If this client initiated the mutation, local cache was already optimistically updated
     if (msg.senderId && msg.senderId === this.clientId) {
       if (msg.version) this.dbVersion = Math.max(this.dbVersion, msg.version);
+      this.lastOwnWriteAt = Date.now();
       return;
     }
 
     const { type, path, value, delta, updates, date, version } = msg;
     const isExplicitReopen = Boolean(msg.isExplicitReopen || updates?.isExplicitReopen);
+    const prevVersion = this.dbVersion;
     if (version) {
       this.dbVersion = Math.max(this.dbVersion, version);
     }
@@ -960,6 +977,27 @@ class ServerDatabaseEngine {
         break;
       }
     }
+
+    // Every server save bumps the version by one. When this message is the very next one and was applied above, the
+    // cache matches the server again, so adopt its timestamp; otherwise the 1.5 s health check re-downloads everything.
+    if (version && version === prevVersion + 1 && msg.timestamp && DELTA_APPLIED_TYPES.has(type) && this.cache && !this.lastOwnWriteAt) {
+      this.cache.lastUpdated = msg.timestamp;
+      this.scheduleSettleFetch();
+    }
+  }
+
+  // Server-side side effects (duplicate tickets solved together, count mirroring) are not in the delta messages,
+  // so one full download once changes go quiet keeps screens that stay open all day exact.
+  private scheduleSettleFetch() {
+    const now = Date.now();
+    this.lastForeignDeltaAt = now;
+    if (!this.settleDeadline) this.settleDeadline = now + SETTLE_MAX_WAIT_MS;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      this.settleDeadline = 0;
+      this.fetchFullDatabase();
+    }, Math.max(0, Math.min(SETTLE_QUIET_MS, this.settleDeadline - now)));
   }
 
   private debouncedFetchFullDatabase() {
@@ -975,9 +1013,10 @@ class ServerDatabaseEngine {
     if (!serverDb || typeof serverDb !== 'object') return { merged: localDb, shouldPushToServer: true };
 
     let shouldPushToServer = false;
+    // version and lastUpdated must be the server's: the 1.5 s health check compares them to decide whether to re-download.
     const merged: any = {
-      version: Math.max(localDb.version || 1, serverDb.version || 1),
-      lastUpdated: new Date().toISOString(),
+      version: serverDb.version || Math.max(localDb.version || 1, 1),
+      lastUpdated: serverDb.lastUpdated || new Date().toISOString(),
       config: { ...(localDb.config || {}), ...(serverDb.config || {}) },
       data: { ...(serverDb.data || {}) }
     };
@@ -1018,10 +1057,12 @@ class ServerDatabaseEngine {
         if (!mergedRides[rId]) {
           mergedRides[rId] = rVal;
         } else {
+          // The server copy wins: a device's stored copy can be days old, and letting it win kept showing an old
+          // picture (or name) after an admin changed it, even across logout and reload.
           mergedRides[rId] = {
-            ...mergedRides[rId],
             ...rVal,
-            imageUrl: rVal.imageUrl || mergedRides[rId].imageUrl || null
+            ...mergedRides[rId],
+            imageUrl: mergedRides[rId].imageUrl || rVal.imageUrl || null
           };
         }
       }
@@ -1216,6 +1257,7 @@ class ServerDatabaseEngine {
   }
 
   public async fetchFullDatabase() {
+    const startedAt = Date.now();
     try {
       const res = await fetch(`/api/db?_t=${Date.now()}`, {
         cache: 'no-store',
@@ -1233,7 +1275,14 @@ class ServerDatabaseEngine {
           }
           const { merged, shouldPushToServer } = this.mergeDatabases(localFallback || {}, json.db);
           this.cache = merged;
-          this.dbVersion = Math.max(json.version || 1, this.dbVersion);
+          // The server's version is authoritative; a higher local number would never match the health check again.
+          this.dbVersion = json.version || this.dbVersion;
+          if (this.lastOwnWriteAt && this.lastOwnWriteAt < startedAt) this.lastOwnWriteAt = 0;
+          if (this.settleTimer && this.lastForeignDeltaAt < startedAt) {
+            clearTimeout(this.settleTimer);
+            this.settleTimer = null;
+            this.settleDeadline = 0;
+          }
           this.saveToLocalStorage();
           this.notifyAllListeners();
           this.setConnected(true);
@@ -1405,6 +1454,7 @@ class ServerDatabaseEngine {
       this.notifyPathListeners('config');
     }
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     if (this.cache) {
       this.cache.version = this.dbVersion;
       this.cache.lastUpdated = new Date().toISOString();
@@ -1566,6 +1616,7 @@ class ServerDatabaseEngine {
     this.lastLocalEditTime = Date.now();
     this.setValueLocal(norm, value);
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyPathListeners(norm);
 
@@ -1619,6 +1670,7 @@ class ServerDatabaseEngine {
     // Optimistic local update (instant 0ms feedback)
     this.setValueLocal(norm, newVal);
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyPathListeners(norm);
 
@@ -1722,6 +1774,7 @@ class ServerDatabaseEngine {
     this.setValueLocal(tktPath, newTkt);
     this.setValueLocal(totalPath, newTotal);
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
 
     this.notifyPathListeners(`data/dailyPackageCounts/${d}`);
@@ -1853,6 +1906,7 @@ class ServerDatabaseEngine {
     this.setValueLocal(tktPath, newTkt);
     this.setValueLocal(totalPath, newTotal);
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
 
     this.notifyPathListeners(`data/dailyPackageCounts/${d}`);
@@ -1949,6 +2003,7 @@ class ServerDatabaseEngine {
     }
 
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     Object.keys(formattedUpdates).forEach(p => this.notifyPathListeners(p));
 
@@ -2003,6 +2058,7 @@ class ServerDatabaseEngine {
     this.lastLocalEditTime = Date.now();
     this.setValueLocal(norm, null);
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyPathListeners(norm);
 
@@ -2098,6 +2154,7 @@ class ServerDatabaseEngine {
     }
 
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyPathListeners('data/maintenanceTickets');
     this.notifyPathListeners('config');
@@ -2183,6 +2240,7 @@ class ServerDatabaseEngine {
     }
 
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyPathListeners('data/maintenanceTickets');
     this.notifyPathListeners('config');
@@ -2218,6 +2276,7 @@ class ServerDatabaseEngine {
   public async forceCloudSync(): Promise<{ success: boolean; message: string }> {
     this.lastLocalEditTime = Date.now();
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     if (this.cache) {
       this.cache.version = this.dbVersion;
       this.cache.lastUpdated = new Date().toISOString();
@@ -2283,6 +2342,7 @@ class ServerDatabaseEngine {
 
     this.lastLocalEditTime = Date.now();
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyAllListeners();
 
@@ -2339,6 +2399,7 @@ class ServerDatabaseEngine {
 
     this.lastLocalEditTime = Date.now();
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyAllListeners();
 
@@ -2399,6 +2460,7 @@ class ServerDatabaseEngine {
 
     this.lastLocalEditTime = Date.now();
     this.dbVersion = (this.dbVersion || 1) + 1;
+    this.lastOwnWriteAt = Date.now();
     this.saveToLocalStorage();
     this.notifyAllListeners();
 

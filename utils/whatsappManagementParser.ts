@@ -100,6 +100,19 @@ function isValidIsoDate(iso: string): boolean {
  * Reads the first amount after the label, e.g. "Individual sales (entry): 1,350/=" -> 1350, "Kiddo package sold: 52 pcs." -> 52.
  */
 function readAmount(line: string): number {
+  // "198, 290/=" is one amount typed with a space after the thousands comma.
+  const text = line.replace(/(\d),\s+(?=\d{3}(?!\d))/g, '$1,');
+  // Taka amounts end in "/=", so the number right before it wins over numbers in the label or a calculation.
+  const taka = text.match(/(\d[\d,]*(?:\.\d+)?)\s*\/=/);
+  if (taka) return cleanCurrencyAmount(taka[1]);
+  const colon = text.indexOf(':');
+  const valuePart = colon >= 0 ? text.slice(colon + 1) : text;
+  const m = valuePart.match(/\d[\d,]*(?:\.\d+)?/);
+  return m ? cleanCurrencyAmount(m[0]) : 0;
+}
+
+/** Reads a count (packages sold, foot fall): the first number after the label, never a taka amount on the same line. */
+function readCount(line: string): number {
   const colon = line.indexOf(':');
   const valuePart = colon >= 0 ? line.slice(colon + 1) : line;
   const m = valuePart.match(/\d[\d,]*(?:\.\d+)?/);
@@ -171,10 +184,10 @@ export function parseManagementReportText(
   };
 
   // The amount sometimes wraps onto the next line ("Total Foot Fall:" then "258 person").
-  const amountAt = (i: number): { value: number; consumedNext: boolean } => {
-    if (hasAmount(rawLines[i])) return { value: readAmount(rawLines[i]), consumedNext: false };
+  const amountAt = (i: number, read: (line: string) => number = readAmount): { value: number; consumedNext: boolean } => {
+    if (hasAmount(rawLines[i])) return { value: read(rawLines[i]), consumedNext: false };
     const next = rawLines[i + 1];
-    if (next && /^\d/.test(next)) return { value: readAmount(next), consumedNext: true };
+    if (next && /^\d/.test(next)) return { value: read(next), consumedNext: true };
     return { value: 0, consumedNext: false };
   };
 
@@ -186,8 +199,8 @@ export function parseManagementReportText(
 
     if (/^kiddo\s*package\s*sold/i.test(line)) {
       closeCounter();
-      kiddoPackageSold = readAmount(line);
-      if (i + 1 < rawLines.length && /^revenue\b/i.test(rawLines[i + 1])) {
+      kiddoPackageSold = readCount(line);
+      if (i + 1 < rawLines.length && /^(?:kiddo\s+)?revenue\b/i.test(rawLines[i + 1])) {
         toggiKiddoSale = readAmount(rawLines[i + 1]);
         i++;
       }
@@ -196,8 +209,8 @@ export function parseManagementReportText(
 
     if (/^xtreme\s*package\s*sold/i.test(line)) {
       closeCounter();
-      xtremePackageSold = readAmount(line);
-      if (i + 1 < rawLines.length && /^revenue\b/i.test(rawLines[i + 1])) {
+      xtremePackageSold = readCount(line);
+      if (i + 1 < rawLines.length && /^(?:xtreme\s+)?revenue\b/i.test(rawLines[i + 1])) {
         toggiXtremeSale = readAmount(rawLines[i + 1]);
         i++;
       }
@@ -206,7 +219,7 @@ export function parseManagementReportText(
 
     if (/^(total\s*)?foot\s*fall/i.test(line)) {
       closeCounter();
-      const { value, consumedNext } = amountAt(i);
+      const { value, consumedNext } = amountAt(i, readCount);
       totalFootFall = value;
       if (consumedNext) i++;
       continue;
