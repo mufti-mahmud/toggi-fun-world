@@ -17,12 +17,15 @@ import {
   getDhakaDateString,
   formatDhakaTime
 } from './constants';
-import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite } from './sqliteDb';
+import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite, adoptLoadedSqliteState, resetSqliteRowCache, jsonOnlyDatesAlreadyMerged } from './sqliteDb';
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
 import { isManagementSalesMessage, parseManagementReportText } from './utils/whatsappManagementParser';
 import { createSiteAuth, readApiKey, safeEqual, clientIp, createAttemptLimiter } from './siteAuth';
 import { format as formatLogArgs } from 'node:util';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import zlib from 'node:zlib';
+import { createRequire } from 'node:module';
+import { externalizeImages, countInlineImages, resolveLocalImage, referencedImageFiles } from './imageFiles';
 import { initActivityLog, logActivity, flushActivityLog, readActivityDay, iterateActivityDay, summarizeActivityDay, listActivityDays, activityCsvRow, ACTIVITY_CSV_HEADER, ACTIVITY_PAGE_SIZE, suppressedActivityRows, dhakaDay } from './activityLog';
 
 // Ensure production mode if running from compiled server.cjs bundle
@@ -50,6 +53,7 @@ const WHAPI_ENV_TOKEN = String(process.env.WHAPI_API_TOKEN || '').trim();
 const WHATSAPP_POLL_INTERVAL_MINUTES = Math.max(5, Number(process.env.WHATSAPP_POLL_INTERVAL_MINUTES) || 120);
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
+const IMAGES_DIR = path.join(DATA_DIR, 'images');
 
 // Initialize Data Directory
 if (!fs.existsSync(DATA_DIR)) {
@@ -78,6 +82,7 @@ function markWhatsAppMessageProcessed(messageId: string) {
         db.config.whatsappConfig.processedMessageIds = [];
       }
       if (!db.config.whatsappConfig.processedMessageIds.includes(messageId)) {
+        dbResponseCache = null;
         db.config.whatsappConfig.processedMessageIds.push(messageId);
         if (db.config.whatsappConfig.processedMessageIds.length > 2000) {
           db.config.whatsappConfig.processedMessageIds = db.config.whatsappConfig.processedMessageIds.slice(-2000);
@@ -196,6 +201,7 @@ function cleanupDeletedTicket(
     for (const dId of deletedIds) {
       sqlite.prepare('DELETE FROM maintenance_tickets WHERE id = ?').run(String(dId));
     }
+    resetSqliteRowCache();
   } catch (e) {}
 
   return { deletedCount, deletedIds };
@@ -416,6 +422,106 @@ function getInitialDatabase() {
   };
 }
 
+// History records are written to data/historyLog/<Date.now()>; on an array those keys are dropped by JSON and SQLite.
+function historyLogAsObject(data: any) {
+  if (!data || !Array.isArray(data.historyLog)) return;
+  const asObject: Record<string, any> = {};
+  data.historyLog.forEach((h: any, i: number) => {
+    if (h && typeof h === 'object') asObject[String(h.id ?? i)] = h;
+  });
+  data.historyLog = asObject;
+}
+
+// database.json is JSON.stringify(memoryDb), which starts with the version, so a large file need not be parsed for it.
+function readJsonDbVersion(): number {
+  try {
+    const fd = fs.openSync(DB_FILE, 'r');
+    try {
+      const head = Buffer.alloc(128);
+      const n = fs.readSync(fd, head, 0, head.length, 0);
+      const m = /^\s*\{\s*"version"\s*:\s*(\d+)/.exec(head.toString('utf-8', 0, n));
+      return m ? Number(m[1]) : NaN;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (_) {
+    return NaN;
+  }
+}
+
+// The previous build never deleted SQLite rows; a database.json at least as new lacks what was deleted since its start.
+function dropRowsDeletedUnderPreviousBuild(state: any, jsonDb: any) {
+  // After a blank start database.json lacks real rows that SQLite still holds, so nothing is removed then.
+  try {
+    if (fs.readdirSync(DATA_DIR).some(f => f.startsWith('tfw.db.unreadable-'))) return;
+  } catch (_) {
+    return;
+  }
+  const isObj = (v: any) => v && typeof v === 'object';
+  const removed: Record<string, number> = {};
+  const prune = (parent: any, key: string, source: any) => {
+    const target = parent?.[key];
+    if (!isObj(target) || !isObj(source)) return;
+    const keep = new Set(Array.isArray(source) ? source.map((x: any) => String(x?.id)) : Object.keys(source));
+    let n = 0;
+    if (Array.isArray(target)) {
+      parent[key] = target.filter((x: any) => keep.has(String(x?.id)));
+      n = target.length - parent[key].length;
+    } else {
+      for (const k of Object.keys(target)) {
+        if (!keep.has(k)) { delete target[k]; n++; }
+      }
+    }
+    if (n) removed[key] = n;
+  };
+  for (const k of ['rides', 'operators', 'ticketSalesPersonnel', 'maintenancePersonnel', 'cxPersonnel', 'counters', 'packages']) {
+    prune(state.config, k, jsonDb?.config?.[k]);
+  }
+  for (const k of ['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales', 'whatsappManagementReports']) {
+    prune(state.data, k, jsonDb?.data?.[k]);
+  }
+  const jsonTickets = jsonDb?.data?.maintenanceTickets;
+  if (isObj(jsonTickets) && isObj(state.data?.maintenanceTickets)) {
+    const keep = new Set<string>();
+    for (const [dk, day] of Object.entries(jsonTickets as Record<string, any>)) {
+      if (!isObj(day)) continue;
+      if (day.id && (day.problem || day.status || day.reportedAt)) keep.add(String(day.id || dk));
+      else for (const [tId, t] of Object.entries(day as Record<string, any>)) keep.add(String(t?.id || tId));
+    }
+    let n = 0;
+    for (const [dk, day] of Object.entries(state.data.maintenanceTickets as Record<string, any>)) {
+      if (!isObj(day)) continue;
+      for (const tId of Object.keys(day)) {
+        if (!keep.has(String(day[tId]?.id || tId))) { delete day[tId]; n++; }
+      }
+      if (Object.keys(day).length === 0) delete state.data.maintenanceTickets[dk];
+    }
+    if (n) removed.maintenanceTickets = n;
+  }
+  if (Object.keys(removed).length === 0) return;
+  for (const name of ['tfw.db', 'tfw.db-wal']) {
+    try {
+      const file = path.join(DATA_DIR, name);
+      if (fs.existsSync(file)) fs.copyFileSync(file, path.join(DATA_DIR, `${name}.before-deletions-${Date.now()}`));
+    } catch (copyErr) {
+      console.error(`Could not keep a copy of ${name}:`, copyErr);
+    }
+  }
+  console.warn(`SQLite still held items deleted under the previous build; they are removed now (a copy of tfw.db was kept): ${JSON.stringify(removed)}`);
+}
+
+// A device's cache can be behind the server, and saves now delete removed keys, so its sync must not drop keys it has not seen.
+function mergeKeyedCollection(current: any, incoming: any): any {
+  if (incoming === undefined) return current;
+  if (Array.isArray(current) && Array.isArray(incoming)) {
+    const ids = new Set(incoming.map((x: any) => String(x?.id)));
+    return [...incoming, ...current.filter((x: any) => x?.id != null && !ids.has(String(x.id)))];
+  }
+  const isMap = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
+  if (isMap(current) && isMap(incoming)) return { ...current, ...incoming };
+  return incoming;
+}
+
 // In-Memory Database with Disk Persistence
 let memoryDb: any = null;
 let sseClients: Array<{ id: number; res: express.Response }> = [];
@@ -432,17 +538,23 @@ function loadDatabase(): any {
         if (!sqliteState.data.dailyPackageCounts) sqliteState.data.dailyPackageCounts = {};
         if (!sqliteState.data.dailyTicketCounts) sqliteState.data.dailyTicketCounts = {};
         
-        // Dates that exist only in database.json (written before the SQLite move) are copied across unchanged.
-        if (fs.existsSync(DB_FILE)) {
+        // Dates only in database.json are copied once, and again whenever it is newer than SQLite (SQLite saves failing).
+        const firstStartOfThisBuild = !jsonOnlyDatesAlreadyMerged();
+        const sqliteVersion = Number(sqliteState.version) || 0;
+        if (fs.existsSync(DB_FILE) && (firstStartOfThisBuild || !(readJsonDbVersion() <= sqliteVersion))) {
           try {
             const jsonDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-            const jsonOnlyDates = Object.keys(jsonDb?.data?.dailyCounts || {}).filter(d => !sqliteState.data.dailyCounts[d]);
-            for (const d of jsonOnlyDates) {
-              for (const coll of ['dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts'] as const) {
-                const counts = jsonDb.data[coll]?.[d];
-                if (counts && typeof counts === 'object') sqliteState.data[coll][d] = counts;
+            const jsonVersion = Number(jsonDb?.version) || 0;
+            if (firstStartOfThisBuild || jsonVersion > sqliteVersion) {
+              const jsonOnlyDates = Object.keys(jsonDb?.data?.dailyCounts || {}).filter(d => !sqliteState.data.dailyCounts[d]);
+              for (const d of jsonOnlyDates) {
+                for (const coll of ['dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts'] as const) {
+                  const counts = jsonDb.data[coll]?.[d];
+                  if (counts && typeof counts === 'object') sqliteState.data[coll][d] = counts;
+                }
               }
             }
+            if (firstStartOfThisBuild && jsonVersion >= sqliteVersion) dropRowsDeletedUnderPreviousBuild(sqliteState, jsonDb);
           } catch (_) {}
         }
 
@@ -465,6 +577,7 @@ function loadDatabase(): any {
         if (!sqliteState.data) sqliteState.data = {};
 
         console.log(`⚡ Loaded database state from offline SQLite database (version: ${sqliteState.version}, rides: ${Object.keys(sqliteState.config.rides || {}).length})`);
+        adoptLoadedSqliteState();
         memoryDb = sqliteState;
         return memoryDb;
       }
@@ -503,6 +616,7 @@ function loadDatabase(): any {
       if (parsed.data.packageSales === undefined) parsed.data.packageSales = {};
       if (parsed.data.maintenanceTickets === undefined) parsed.data.maintenanceTickets = {};
       if (parsed.data.historyLog === undefined) parsed.data.historyLog = {};
+      historyLogAsObject(parsed.data);
       
       let healed = false;
 
@@ -751,6 +865,40 @@ setInterval(() => {
   opsCounter = 0;
 }, 10000);
 
+// SQLite is the store that is loaded; database.json is only the fallback copy, so it is rewritten at most once a minute.
+const JSON_COPY_INTERVAL_MS = 60 * 1000;
+let lastJsonCopyAt = 0;
+let jsonCopyWrites = 0;
+let jsonCopyTimer: NodeJS.Timeout | null = null;
+let jsonCopyCountDates: string[] = [];
+
+function writeJsonCopy() {
+  if (!memoryDb) return;
+  // Compact JSON: same content, less CPU on the 0.2-core server and a smaller file.
+  const serialized = JSON.stringify(memoryDb);
+  const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
+  fs.writeFileSync(tempFile, serialized, 'utf-8');
+  fs.renameSync(tempFile, DB_FILE);
+
+  // Rotating backup every 10 copies, through a temp file so an interrupted write cannot leave it cut short.
+  if (jsonCopyWrites % 10 === 0) {
+    const backupTemp = `${DB_FILE}.backup.tmp`;
+    fs.writeFileSync(backupTemp, serialized, 'utf-8');
+    fs.renameSync(backupTemp, `${DB_FILE}.backup`);
+  }
+  jsonCopyWrites++;
+  lastJsonCopyAt = Date.now();
+  const counts = memoryDb.data?.dailyCounts || {};
+  jsonCopyCountDates = Object.keys(counts).filter(d => counts[d]);
+  healthWindow.lastSnapshotBytes = serialized.length;
+}
+
+// loadDatabase copies count days found only in database.json into SQLite, so a deleted day must reach the copy at once.
+function countDayRemovedSinceJsonCopy(): boolean {
+  const counts = memoryDb?.data?.dailyCounts || {};
+  return jsonCopyCountDates.some(d => !counts[d]);
+}
+
 function executeDiskFlush() {
   if (isFlushingToDisk) {
     needsReFlush = true;
@@ -765,25 +913,26 @@ function executeDiskFlush() {
   setImmediate(() => {
     const flushStarted = Date.now();
     try {
-      // Compact JSON: same content, less CPU on the 0.2-core server and a smaller file.
-      const serialized = JSON.stringify(memoryDb);
-      const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tempFile, serialized, 'utf-8');
-      fs.renameSync(tempFile, DB_FILE);
-
-      // Rotating backup every 10 flushes, through a temp file so an interrupted write cannot leave it cut short.
-      if (concurrencyMetrics.successfulDiskFlushes % 10 === 0) {
-        const backupTemp = `${DB_FILE}.backup.tmp`;
-        fs.writeFileSync(backupTemp, serialized, 'utf-8');
-        fs.renameSync(backupTemp, `${DB_FILE}.backup`);
-      }
-      healthWindow.lastSnapshotBytes = serialized.length;
-
       // Synchronous atomic write to SQLite database
+      let sqliteFailed = false;
       try {
         saveToSqlite(memoryDb);
       } catch (sqlErr) {
+        sqliteFailed = true;
         console.error('Failed to write database to SQLite:', sqlErr);
+      }
+
+      // When SQLite fails, database.json is the only current copy, so it is written at once.
+      if (sqliteFailed || flushStarted - lastJsonCopyAt >= JSON_COPY_INTERVAL_MS || countDayRemovedSinceJsonCopy()) {
+        writeJsonCopy();
+      } else if (!jsonCopyTimer) {
+        jsonCopyTimer = setTimeout(() => {
+          jsonCopyTimer = null;
+          // A flush already queued writes the copy itself, because the minute has passed by then.
+          if (isFlushingToDisk) return;
+          try { writeJsonCopy(); } catch (e) { console.error('Failed to write database to disk safely:', e); }
+        }, lastJsonCopyAt + JSON_COPY_INTERVAL_MS - flushStarted);
+        jsonCopyTimer.unref();
       }
 
       concurrencyMetrics.successfulDiskFlushes++;
@@ -878,8 +1027,15 @@ function logDataChange(mutation?: ServerMutationEvent) {
   logActivity('data', String(m.type || 'save'), { actor: String(m.senderId || ''), detail });
 }
 
+// GET /api/db body for one database version, serialised and compressed once however many tabs download it.
+interface DbResponse { db: any; version: any; lastUpdated: any; builtAt: number; body: Buffer; etag: string | undefined; encoded: Map<string, Promise<Buffer>> }
+let dbResponseCache: DbResponse | null = null;
+// Safety net for any in-place change that skips saveDatabaseToDisk; tabs fetch a new version within 1.5 s.
+const DB_RESPONSE_MAX_AGE_MS = 10 * 1000;
+
 function saveDatabaseToDisk(mutation?: ServerMutationEvent, immediate: boolean = false) {
   if (!memoryDb) return;
+  dbResponseCache = null;
   memoryDb.version = (memoryDb.version || 0) + 1;
   memoryDb.lastUpdated = new Date().toISOString();
   concurrencyMetrics.operationsTotal++;
@@ -903,6 +1059,28 @@ function removeSecretsFromDatabase() {
   for (const k of secretKeys) delete waConfig[k];
   console.log(`🔐 Removed ${secretKeys.join(', ')} from the stored WhatsApp config; tokens are read from environment variables.`);
   saveDatabaseToDisk({ type: 'update', updates: { 'config/whatsappConfig': waConfig } }, true);
+}
+
+// Photos and logos saved inline by earlier builds are moved to data/images once. Each file is verified before its field
+// is replaced and a safety copy is kept, so a run cut short simply repeats on the next start.
+function moveInlineImagesToFiles() {
+  if (!memoryDb || countInlineImages(memoryDb) === 0) return;
+  try {
+    const safety = path.join(DATA_DIR, 'restore-points', 'before-image-files.json');
+    if (!fs.existsSync(safety)) {
+      fs.mkdirSync(path.dirname(safety), { recursive: true });
+      fs.writeFileSync(`${safety}.tmp`, JSON.stringify(memoryDb), 'utf-8');
+      fs.renameSync(`${safety}.tmp`, safety);
+    }
+  } catch (e) {
+    console.error('Photos stay inside the database: the safety copy could not be written:', e);
+    return;
+  }
+  const moved = externalizeImages(IMAGES_DIR, memoryDb);
+  if (moved > 0) {
+    console.log(`🖼️ Moved ${moved} photos and logos from the database into data/images.`);
+    saveDatabaseToDisk({ type: 'sync', force: true }, true);
+  }
 }
 
 function broadcastMutation(mutation: ServerMutationEvent) {
@@ -1325,11 +1503,19 @@ async function startServer() {
 
   app.use(siteAuth.gate);
   app.use((req, res, next) => { res.locals.passedSiteGate = true; next(); });
+  // Pictures arriving as data URLs become files before the write is applied, saved or sent to other tabs. After the
+  // login check, so only signed-in devices can add files.
+  const IMAGE_WRITE_PATHS = new Set(['/api/db/set', '/api/db/update', '/api/db/sync-queue', '/api/db/broadcast-sync', '/api/maintenance/report-issue', '/api/whatsapp/send-ticket-update']);
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && IMAGE_WRITE_PATHS.has(req.path) && req.body && typeof req.body === 'object') externalizeImages(IMAGES_DIR, req.body);
+    next();
+  });
   siteAuth.registerRoutes(app);
 
   // 1. Load initial memory & local cache from SQLite
   loadDatabase();
   removeSecretsFromDatabase();
+  moveInlineImagesToFiles();
   logActivity('system', 'server started', {
     detail: { node: process.version, dbVersion: memoryDb?.version, whatsappPollMinutes: process.env.WHATSAPP_POLL_DISABLED === '1' ? 'off' : WHATSAPP_POLL_INTERVAL_MINUTES, webhookSecretSet: Boolean(WHATSAPP_WEBHOOK_SECRET) }
   });
@@ -1420,17 +1606,24 @@ async function startServer() {
     try {
       const { db, activeDate, activeView, maintenancePortal, maintenanceStatusTab, maintenanceViewScope, senderId } = req.body;
       if (db && typeof db === 'object') {
+        const currentConfig = memoryDb?.config || {};
+        const incomingConfig = db.config || {};
+        const mergedConfig = { ...currentConfig, ...incomingConfig };
+        for (const k of ['rides', 'operators', 'ticketSalesPersonnel', 'maintenancePersonnel', 'cxPersonnel', 'counters', 'packages']) {
+          if (k in incomingConfig) mergedConfig[k] = mergeKeyedCollection(currentConfig[k], incomingConfig[k]);
+        }
         memoryDb = {
           version: (memoryDb?.version || 1) + 1,
           lastUpdated: new Date().toISOString(),
-          config: {
-            ...(memoryDb?.config || {}),
-            ...(db.config || {})
-          },
+          config: mergedConfig,
           data: (() => {
             const currentData = memoryDb?.data || {};
-            const incomingData = db.data || {};
+            const incomingData = { ...(db.data || {}) };
+            historyLogAsObject(incomingData);
             const mergedData = { ...currentData, ...incomingData };
+            for (const k of ['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales', 'whatsappManagementReports', 'historyLog']) {
+              if (k in incomingData) mergedData[k] = mergeKeyedCollection(currentData[k], incomingData[k]);
+            }
             if (currentData.maintenanceTickets && incomingData.maintenanceTickets) {
               const statusRank: Record<string, number> = { 'solved': 3, 'in-progress': 2, 'reported': 1 };
               const mergedMaint = { ...incomingData.maintenanceTickets };
@@ -1543,6 +1736,18 @@ async function startServer() {
     }
   });
 
+  // Same negotiator, encodings, preference and threshold as the compression middleware, which leaves an encoded body alone.
+  const requireFromCompression = createRequire(createRequire(import.meta.url).resolve('compression'));
+  const Negotiator = requireFromCompression('negotiator');
+  const DB_ENCODINGS = 'createBrotliCompress' in zlib ? ['br', 'gzip', 'deflate', 'identity'] : ['gzip', 'deflate', 'identity'];
+  const DB_PREFERRED_ENCODINGS = 'createBrotliCompress' in zlib ? ['br', 'gzip'] : ['gzip'];
+  const encodeDbBody = (method: string, body: Buffer) => new Promise<Buffer>((resolve, reject) => {
+    const done = (err: Error | null, out: Buffer) => (err ? reject(err) : resolve(out));
+    if (method === 'br') zlib.brotliCompress(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } }, done);
+    else if (method === 'gzip') zlib.gzip(body, done);
+    else zlib.deflate(body, done);
+  });
+
   // Full DB or subpath
   app.get('/api/db', (req, res) => {
     const pathQuery = req.query.path as string;
@@ -1551,7 +1756,46 @@ async function startServer() {
       const val = getValueByPath(db, pathQuery);
       return res.json({ success: true, data: val, version: db.version });
     }
-    res.json({ success: true, db, version: db.version });
+    let entry = dbResponseCache;
+    if (!entry || entry.db !== db || entry.version !== db.version || entry.lastUpdated !== db.lastUpdated || Date.now() - entry.builtAt > DB_RESPONSE_MAX_AGE_MS) {
+      const body = Buffer.from(JSON.stringify({ success: true, db, version: db.version }));
+      const etagFn = app.get('etag fn');
+      const built: DbResponse = { db, version: db.version, lastUpdated: db.lastUpdated, builtAt: Date.now(), body, etag: etagFn ? etagFn(body) : undefined, encoded: new Map() };
+      dbResponseCache = entry = built;
+      // Do not hold a copy of the whole database in memory once the tabs have fetched it.
+      setTimeout(() => { if (dbResponseCache === built) dbResponseCache = null; }, DB_RESPONSE_MAX_AGE_MS).unref();
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (entry.etag) res.setHeader('ETag', entry.etag);
+    res.vary('Accept-Encoding');
+    if (req.fresh) {
+      res.status(304);
+      res.removeHeader('Content-Type');
+      return res.end();
+    }
+    const method = req.method !== 'HEAD' && entry.body.length >= 1024 && req.headers['accept-encoding']
+      ? new Negotiator(req).encoding(DB_ENCODINGS, DB_PREFERRED_ENCODINGS) || 'identity'
+      : 'identity';
+    const sendBody = (body: Buffer) => {
+      if (res.headersSent || res.destroyed) return;
+      res.setHeader('Content-Length', body.length);
+      res.end(body);
+    };
+    if (method === 'identity') return sendBody(entry.body);
+    const cached = entry;
+    let pending = cached.encoded.get(method);
+    if (!pending) {
+      pending = encodeDbBody(method, cached.body);
+      cached.encoded.set(method, pending);
+    }
+    pending.then((encoded) => {
+      if (!res.headersSent) res.setHeader('Content-Encoding', method);
+      sendBody(encoded);
+    }, (e) => {
+      cached.encoded.delete(method);
+      console.error('Could not compress the database download:', e);
+      sendBody(cached.body);
+    });
   });
 
   // Set single path
@@ -1587,7 +1831,7 @@ async function startServer() {
   });
 
   // Dedicated Ride & Attraction Image Upload & Update Endpoint
-  const RIDE_IMAGES_DIR = path.join(process.cwd(), 'data', 'images');
+  const RIDE_IMAGES_DIR = IMAGES_DIR;
   if (!fs.existsSync(RIDE_IMAGES_DIR)) {
     try { fs.mkdirSync(RIDE_IMAGES_DIR, { recursive: true }); } catch (_) {}
   }
@@ -4735,6 +4979,10 @@ async function startServer() {
     const db = loadDatabase();
     const cfg = db.config?.whatsappConfig || {};
     const chatId = overrideChatId || cfg.groupChatId || TFW_ISSUE_RESOLVE_GROUP_ID;
+    // Stored photos are /data/images URLs; both gateways need the bytes (the files are not public).
+    const resolved = resolveLocalImage(IMAGES_DIR, mediaData);
+    if (resolved === null) return sendViaGreenApiText(caption, chatId);
+    mediaData = resolved;
 
     // 1. Try Green-API media upload
     const greenRes = await sendViaGreenApiMedia(mediaData, caption, chatId);
@@ -5698,6 +5946,7 @@ async function startServer() {
       const sqlite = getSqliteDatabase();
       sqlite.exec('DELETE FROM maintenance_tickets;');
       sqlite.prepare("UPDATE system_config SET deleted_ticket_ids = '[]', deleted_wa_msg_ids = '[]' WHERE id = 'primary'").run();
+      resetSqliteRowCache();
     } catch (e) {
       console.warn('Could not clear sqlite maintenance_tickets:', e);
     }
@@ -5925,14 +6174,18 @@ async function startServer() {
   }
 
   function buildBackupFile() {
+    const database = loadDatabase();
+    // Stored photos of deleted tickets stay on disk, but a backup only carries those the data still uses, as before.
+    const usedPhotos = referencedImageFiles(database);
     const images: Record<string, string> = {};
     if (fs.existsSync(RIDE_IMAGES_DIR)) {
       for (const name of fs.readdirSync(RIDE_IMAGES_DIR)) {
+        if (name.startsWith('img_') && !usedPhotos.has(name)) continue;
         const filePath = path.join(RIDE_IMAGES_DIR, name);
         if (fs.statSync(filePath).isFile()) images[name] = fs.readFileSync(filePath).toString('base64');
       }
     }
-    return { format: 'tfw-backup', formatVersion: 1, createdAt: new Date().toISOString(), database: loadDatabase(), images };
+    return { format: 'tfw-backup', formatVersion: 1, createdAt: new Date().toISOString(), database, images };
   }
 
   function saveRestorePoint() {
@@ -5975,6 +6228,9 @@ async function startServer() {
       delete waConfig.apiTokenInstance;
       delete waConfig.whapiToken;
     }
+    // Backups made before data/images was used hold photos and logos inline.
+    externalizeImages(IMAGES_DIR, db);
+    historyLogAsObject(db.data);
     // Jump past every client's cached version so all devices take the restored data instead of their own copy.
     memoryDb = {
       version: Math.max(Number(memoryDb?.version) || 0, Number(db.version) || 0) + 10,

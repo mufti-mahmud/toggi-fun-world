@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 export interface SqliteDbStats {
@@ -197,6 +198,19 @@ export function getSqliteDatabase(dbPath: string = DEFAULT_SQLITE_PATH): Databas
     db.exec(`ALTER TABLE daily_operations ADD COLUMN daily_ticket_counts TEXT;`);
   } catch (_) {}
 
+  // Rows written by older builds have no hash and are rewritten once by the first save.
+  for (const table of ['system_config', ...SYNCED_TABLES]) {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN row_hash TEXT;`);
+    } catch (_) {}
+  }
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_history_log_id ON history_logs(log_id);
+      CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
+    `);
+  } catch (_) {}
+
   sqliteInstance = db;
   return db;
 }
@@ -258,8 +272,289 @@ function extractAllTickets(rawTickets: any, fallbackDate: string): any[] {
   return results;
 }
 
+const SYNCED_TABLES = ['rides', 'staff', 'counters', 'packages', 'maintenance_tickets', 'daily_operations', 'history_logs', 'whatsapp_management_reports'] as const;
+type SyncedTable = typeof SYNCED_TABLES[number];
+
+const KEY_SQL: Record<SyncedTable, string> = {
+  rides: 'CAST(id AS TEXT)',
+  staff: 'CAST(id AS TEXT)',
+  counters: 'CAST(id AS TEXT)',
+  packages: 'CAST(id AS TEXT)',
+  maintenance_tickets: 'CAST(id AS TEXT)',
+  daily_operations: 'operational_date',
+  history_logs: 'CAST(COALESCE(log_id, id) AS TEXT)',
+  whatsapp_management_reports: 'report_date'
+};
+
+const DELETE_SQL: Record<SyncedTable, string> = {
+  rides: 'DELETE FROM rides WHERE id = ?',
+  staff: 'DELETE FROM staff WHERE id = ?',
+  counters: 'DELETE FROM counters WHERE id = ?',
+  packages: 'DELETE FROM packages WHERE id = ?',
+  maintenance_tickets: 'DELETE FROM maintenance_tickets WHERE id = ?',
+  daily_operations: 'DELETE FROM daily_operations WHERE operational_date = ?',
+  history_logs: 'DELETE FROM history_logs WHERE log_id = ? OR (log_id IS NULL AND id = ?)',
+  whatsapp_management_reports: 'DELETE FROM whatsapp_management_reports WHERE report_date = ?'
+};
+
+const NUMERIC_KEY_TABLES = new Set<SyncedTable>(['rides', 'staff', 'counters']);
+
+const INSERT_SQL: Record<SyncedTable, string> = {
+  rides: `INSERT OR REPLACE INTO rides (id, name, floor, capacity, status, min_height, notes, image_url, updated_at, raw_json, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  staff: `INSERT OR REPLACE INTO staff (id, department, name, phone, role, active, notes, raw_json, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  counters: `INSERT OR REPLACE INTO counters (id, name, type, location, active, price, ticket_price, counter_number, raw_json, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  packages: `INSERT OR REPLACE INTO packages (id, name, price, category, description, active, raw_json, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  maintenance_tickets: `INSERT OR REPLACE INTO maintenance_tickets (
+      id, date, ride_id, ride_name, problem, status, priority, source,
+      reported_by_id, reported_by_name, reported_by_role, assigned_to_id, assigned_to_name,
+      helper_ids, helper_names, guest_details, reported_at, in_progress_at, solved_at,
+      resolution_notes, solution_image_url, photo_url, whatsapp_group, whatsapp_chat_id,
+      whatsapp_message_id, updated_at, raw_json, row_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  daily_operations: `INSERT OR REPLACE INTO daily_operations (
+      operational_date, attendance, operator_assignments, ticket_sales_assignments, daily_counts, daily_package_counts, daily_ticket_counts, ticket_sales_data, package_sales, updated_at, row_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  history_logs: `INSERT INTO history_logs (log_id, timestamp, user_name, action, details, row_hash) VALUES (?, ?, ?, ?, ?, ?)`,
+  whatsapp_management_reports: `INSERT OR REPLACE INTO whatsapp_management_reports (
+      report_date, timestamp, sender_name, sender_phone, group_name, kiddo_sale, xtreme_sale, vip_concierge_sale, entry_ticket_sale, total_foot_fall, discount, total_revenue, counter_breakdown_json, raw_message, raw_json, row_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+};
+
+const DAILY_COLLECTIONS = ['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales'];
+
+// Mirror of the key -> row_hash pairs in SQLite; null means it is read from SQLite again at the next save.
+let storedHashes: Map<string, Map<string, string | null>> | null = null;
+// Keys this process has held in memory (adopted load or a save): only these rows may be deleted, never unseen ones.
+const deletableKeys = new Map<string, Set<string>>();
+let lastLoadedKeys: Map<string, Set<string>> | null = null;
+let metaMarkerWritten = false;
+const keptUnknownLogged = new Set<string>();
+
+const JSON_DATES_MARKER = 'json_only_dates_merged';
+
+function rowHash(text: string): string {
+  return crypto.createHash('sha1').update(text).digest('base64');
+}
+
+let statementDb: DatabaseSync | null = null;
+const statements = new Map<string, ReturnType<DatabaseSync['prepare']>>();
+function cachedStatement(db: DatabaseSync, sql: string) {
+  if (statementDb !== db) {
+    statements.clear();
+    statementDb = db;
+  }
+  let stmt = statements.get(sql);
+  if (!stmt) statements.set(sql, (stmt = db.prepare(sql)));
+  return stmt;
+}
+
+const str = (v: any) => (v ? String(v) : null);
+
+type RowSink = (table: SyncedTable, key: string, hashSource: string, params: any[]) => void;
+
+// Rows are handed over one at a time so a save never holds a second copy of the whole database.
+function emitRows(appDb: any, lastUpdated: string, put: RowSink): void {
+  const config = appDb.config || {};
+  const data = appDb.data || {};
+  const numericKey = (id: any) => (Number.isFinite(Number(id)) ? String(Number(id)) : null);
+
+  for (const r of normalizeEntityList(config.rides)) {
+    const key = r.id == null ? null : numericKey(r.id);
+    if (key == null) continue;
+    const raw = JSON.stringify(r);
+    put('rides', key, raw, [
+      Number(r.id), String(r.name || `Ride #${r.id}`), str(r.floor), r.capacity != null ? Number(r.capacity) : null,
+      String(r.status || 'active'), str(r.minHeight), str(r.notes), str(r.imageUrl),
+      r.updatedAt ? String(r.updatedAt) : lastUpdated, raw
+    ]);
+  }
+
+  const staffCategories: Array<[any, string]> = [
+    [config.operators, 'operator'],
+    [config.ticketSalesPersonnel, 'sales'],
+    [config.maintenancePersonnel, 'maintenance'],
+    [config.cxPersonnel, 'cx']
+  ];
+  for (const [list, dept] of staffCategories) {
+    for (const s of normalizeEntityList(list)) {
+      const key = s.id == null ? null : numericKey(s.id);
+      if (key == null) continue;
+      const raw = JSON.stringify(s);
+      put('staff', key, `${dept}\n${raw}`, [
+        Number(s.id), dept, String(s.name || `Staff #${s.id}`), str(s.phone), str(s.role),
+        s.active !== false ? 1 : 0, str(s.notes), raw
+      ]);
+    }
+  }
+
+  for (const c of normalizeEntityList(config.counters)) {
+    const key = c.id == null ? null : numericKey(c.id);
+    if (key == null) continue;
+    const raw = JSON.stringify(c);
+    put('counters', key, raw, [
+      Number(c.id), String(c.name || `Counter #${c.id}`), str(c.type), str(c.location), c.active !== false ? 1 : 0,
+      c.price != null ? Number(c.price) : null, c.ticketPrice != null ? Number(c.ticketPrice) : null,
+      c.counterNumber != null ? String(c.counterNumber) : null, raw
+    ]);
+  }
+
+  for (const p of normalizeEntityList(config.packages)) {
+    if (p.id == null) continue;
+    const raw = JSON.stringify(p);
+    put('packages', String(p.id), raw, [
+      String(p.id), String(p.name || 'Package'), Number(p.price) || 0, str(p.category), str(p.description),
+      p.active !== false ? 1 : 0, raw
+    ]);
+  }
+
+  for (const t of extractAllTickets(data.maintenanceTickets, lastUpdated.slice(0, 10))) {
+    if (!t || !t.id) continue;
+    const raw = JSON.stringify(t);
+    put('maintenance_tickets', String(t.id), raw, [
+      String(t.id), String(t.date || lastUpdated.slice(0, 10)), t.rideId != null ? Number(t.rideId) : null,
+      String(t.rideName || 'Unknown Ride'), String(t.problem || ''), String(t.status || 'reported'),
+      String(t.priority || 'normal'), String(t.source || 'operator'),
+      t.reportedById != null ? Number(t.reportedById) : null, str(t.reportedByName), str(t.reportedByRole),
+      t.assignedToId != null ? Number(t.assignedToId) : null, str(t.assignedToName),
+      t.helperIds ? JSON.stringify(t.helperIds) : null, t.helperNames ? JSON.stringify(t.helperNames) : null,
+      str(t.guestDetails), String(t.reportedAt || lastUpdated), str(t.inProgressAt), str(t.solvedAt),
+      str(t.resolutionNotes), str(t.solutionImageUrl), str(t.photoUrl), str(t.whatsappGroup),
+      str(t.whatsappChatId), str(t.whatsappMessageId), t.updatedAt ? String(t.updatedAt) : lastUpdated, raw
+    ]);
+  }
+
+  const allDates = new Set<string>();
+  for (const coll of DAILY_COLLECTIONS) {
+    for (const d of Object.keys(data[coll] || {})) allDates.add(d);
+  }
+  for (const date of allDates) {
+    // NULL for a collection without this date, so a cleared collection is not reloaded as an empty object.
+    const cols = DAILY_COLLECTIONS.map(coll => {
+      const v = data[coll]?.[date];
+      return v == null ? null : JSON.stringify(v);
+    });
+    put('daily_operations', date, cols.map(c => (c == null ? '\u0000' : c)).join('\u0001'), [date, ...cols, lastUpdated]);
+  }
+
+  for (const [key, h] of historyEntries(data.historyLog)) {
+    const numeric = Number(key);
+    put('history_logs', key, JSON.stringify([h.timestamp ?? null, h.user ?? null, h.action ?? null, h.details ?? null]), [
+      Number.isFinite(numeric) ? numeric : key,
+      String(h.timestamp || lastUpdated), String(h.user || 'system'), String(h.action || 'update'),
+      typeof h.details === 'object' ? JSON.stringify(h.details) : String(h.details || '')
+    ]);
+  }
+
+  const reports = data.whatsappManagementReports && typeof data.whatsappManagementReports === 'object' ? data.whatsappManagementReports : {};
+  for (const [rDate, rep] of Object.entries(reports as Record<string, any>)) {
+    if (!rep || !rDate) continue;
+    const sr = rep.salesAndRevenue || {};
+    const raw = JSON.stringify(rep);
+    put('whatsapp_management_reports', rDate, raw, [
+      rDate, String(rep.timestamp || lastUpdated), str(rep.senderName), str(rep.senderPhone),
+      String(rep.groupName || 'TFW Management Team'), Number(sr.toggiKiddoSale || 0), Number(sr.toggiXtremeSale || 0),
+      Number(sr.toggiVipConciergeSale || 0), Number(sr.entryTicketSale || 0), Number(sr.totalFootFall || 0),
+      Number(sr.discount || 0), Number(sr.totalRevenue || 0), JSON.stringify(rep.counterBreakdown || []),
+      str(rep.rawMessage), raw
+    ]);
+  }
+}
+
+/** History records as [key, record]; the app keeps them as an object keyed by Date.now(), older data as an array. */
+function historyEntries(historyLog: any): Array<[string, any]> {
+  if (Array.isArray(historyLog)) {
+    return historyLog
+      .map((h, i): [string, any] => [String(h?.id ?? i), h])
+      .filter(([, h]) => h && typeof h === 'object');
+  }
+  if (historyLog && typeof historyLog === 'object') {
+    return Object.entries(historyLog).filter(([, h]) => h && typeof h === 'object') as Array<[string, any]>;
+  }
+  return [];
+}
+
+function readStoredHashes(db: DatabaseSync): { hashes: Map<string, Map<string, string | null>>; duplicated: SyncedTable[] } {
+  const all = new Map<string, Map<string, string | null>>();
+  const duplicated: SyncedTable[] = [];
+  const cfg = db.prepare("SELECT row_hash FROM system_config WHERE id = 'primary'").get() as any;
+  all.set('system_config', new Map(cfg ? [['primary', cfg.row_hash ?? null]] : []));
+  for (const table of SYNCED_TABLES) {
+    const rows = db.prepare(`SELECT ${KEY_SQL[table]} AS k, row_hash AS h FROM ${table}`).all() as any[];
+    const m = new Map<string, string | null>();
+    for (const r of rows) {
+      if (r.k == null) continue;
+      if (m.has(String(r.k)) && !duplicated.includes(table)) duplicated.push(table);
+      m.set(String(r.k), r.h ?? null);
+    }
+    all.set(table, m);
+  }
+  return { hashes: all, duplicated };
+}
+
+// A damaged B-tree can hold two rows for one id; DELETE and REPLACE seek by id and leave the other copy behind.
+function rebuildTable(db: DatabaseSync, table: SyncedTable): void {
+  const objects = db.prepare('SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? AND sql IS NOT NULL').all(table) as any[];
+  const create = objects.find(o => o.type === 'table' && o.name === table)?.sql as string | undefined;
+  if (!create) return;
+  const tmp = `${table}__rebuild`;
+  db.exec('SAVEPOINT rebuild_table;');
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${tmp};`);
+    db.exec(create.replace(/^CREATE TABLE\s+"?\w+"?/i, `CREATE TABLE ${tmp}`));
+    // WHERE 1 turns off the page-copy transfer, which rejects the duplicate ids; the copy scanned last wins, as in loadFromSqlite.
+    db.exec(`INSERT OR REPLACE INTO ${tmp} SELECT * FROM ${table} WHERE 1;`);
+    if (table === 'history_logs') {
+      db.exec(`DELETE FROM ${tmp} WHERE id NOT IN (SELECT max(id) FROM ${tmp} GROUP BY ${KEY_SQL.history_logs});`);
+    }
+    db.exec(`DROP TABLE ${table};`);
+    db.exec(`ALTER TABLE ${tmp} RENAME TO ${table};`);
+    for (const o of objects) {
+      if (o.type === 'index' || o.type === 'trigger') db.exec(o.sql);
+    }
+    db.exec('RELEASE rebuild_table;');
+    console.warn(`SQLite ${table}: rebuilt the table because it held more than one row for the same id.`);
+  } catch (err) {
+    db.exec('ROLLBACK TO rebuild_table;');
+    db.exec('RELEASE rebuild_table;');
+    console.error(`SQLite ${table}: could not rebuild a table with duplicate ids:`, err);
+  }
+}
+
+function loadStoredHashes(db: DatabaseSync): Map<string, Map<string, string | null>> {
+  const first = readStoredHashes(db);
+  if (first.duplicated.length === 0) return first.hashes;
+  for (const table of first.duplicated) rebuildTable(db, table);
+  return readStoredHashes(db).hashes;
+}
+
+/** Call after any direct SQL write outside saveToSqlite, so the next save compares against SQLite again. */
+export function resetSqliteRowCache(): void {
+  storedHashes = null;
+}
+
+/** The server took the state from the last loadFromSqlite as memoryDb: those rows may now be deleted when removed. */
+export function adoptLoadedSqliteState(): void {
+  if (!lastLoadedKeys) return;
+  for (const [table, keys] of lastLoadedKeys) {
+    let set = deletableKeys.get(table);
+    if (!set) deletableKeys.set(table, (set = new Set()));
+    for (const k of keys) set.add(k);
+  }
+  lastLoadedKeys = null;
+}
+
+/** True once a save by this build has reached SQLite; from then on database.json can only be older than SQLite. */
+export function jsonOnlyDatesAlreadyMerged(dbPath: string = DEFAULT_SQLITE_PATH): boolean {
+  try {
+    const db = getSqliteDatabase(dbPath);
+    return Boolean(db.prepare('SELECT 1 AS x FROM app_meta WHERE key = ?').get(JSON_DATES_MARKER));
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
- * Persist the entire application database state into SQLite atomically
+ * Write only the rows that changed since the last save and delete rows that left memoryDb, in one transaction
  */
 export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): void {
   if (!appDb || !appDb.config || !appDb.data) return;
@@ -268,262 +563,97 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
   const version = Number(appDb.version) || 1;
   const lastUpdated = String(appDb.lastUpdated || new Date().toISOString());
   const config = appDb.config || {};
-  const data = appDb.data || {};
+
+  const configJson = JSON.stringify(config);
+  const configHash = rowHash(configJson);
+  const present = new Map<string, Map<string, string>>(SYNCED_TABLES.map(t => [t, new Map<string, string>()]));
 
   db.exec('BEGIN IMMEDIATE;');
 
   try {
-    // 1. System Config
-    const stmtConfig = db.prepare(`
-      INSERT OR REPLACE INTO system_config (
-        id, version, last_updated, config_json, whatsapp_config, app_config, deleted_ticket_ids, deleted_wa_msg_ids
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmtConfig.run(
-      'primary',
-      version,
-      lastUpdated,
-      JSON.stringify(config),
-      JSON.stringify(config.whatsappConfig || {}),
-      JSON.stringify(config.appConfig || {}),
-      JSON.stringify(config.deletedTicketIds || []),
-      JSON.stringify(config.deletedWhatsAppMessageIds || [])
-    );
-
-    // 2. Rides
-    const stmtRide = db.prepare(`
-      INSERT OR REPLACE INTO rides (
-        id, name, floor, capacity, status, min_height, notes, image_url, updated_at, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const rides = normalizeEntityList(config.rides);
-    for (const r of rides) {
-      if (r.id == null) continue;
-      stmtRide.run(
-        Number(r.id),
-        String(r.name || `Ride #${r.id}`),
-        r.floor ? String(r.floor) : null,
-        r.capacity != null ? Number(r.capacity) : null,
-        String(r.status || 'active'),
-        r.minHeight ? String(r.minHeight) : null,
-        r.notes ? String(r.notes) : null,
-        r.imageUrl ? String(r.imageUrl) : null,
-        r.updatedAt ? String(r.updatedAt) : lastUpdated,
-        JSON.stringify(r)
-      );
-    }
-
-    // 3. Staff across all departments
-    const stmtStaff = db.prepare(`
-      INSERT OR REPLACE INTO staff (
-        id, department, name, phone, role, active, notes, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const staffCategories: Array<{ list: any[]; dept: string }> = [
-      { list: normalizeEntityList(config.operators), dept: 'operator' },
-      { list: normalizeEntityList(config.ticketSalesPersonnel), dept: 'sales' },
-      { list: normalizeEntityList(config.maintenancePersonnel), dept: 'maintenance' },
-      { list: normalizeEntityList(config.cxPersonnel), dept: 'cx' }
-    ];
-
-    for (const { list, dept } of staffCategories) {
-      for (const s of list) {
-        if (s.id == null) continue;
-        stmtStaff.run(
-          Number(s.id),
-          dept,
-          String(s.name || `Staff #${s.id}`),
-          s.phone ? String(s.phone) : null,
-          s.role ? String(s.role) : null,
-          s.active !== false ? 1 : 0,
-          s.notes ? String(s.notes) : null,
-          JSON.stringify(s)
-        );
+    const current = storedHashes || loadStoredHashes(db);
+    const next = new Map<string, Map<string, string | null>>();
+    const deleteKey = (table: SyncedTable, key: string) => {
+      if (table === 'history_logs') {
+        const n = Number(key);
+        cachedStatement(db, DELETE_SQL[table]).run(Number.isFinite(n) ? n : key, Number.isFinite(n) ? n : -1);
+      } else {
+        cachedStatement(db, DELETE_SQL[table]).run(NUMERIC_KEY_TABLES.has(table) ? Number(key) : key);
       }
-    }
+    };
 
-    // 4. Counters
-    const stmtCounter = db.prepare(`
-      INSERT OR REPLACE INTO counters (
-        id, name, type, location, active, price, ticket_price, counter_number, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const counters = normalizeEntityList(config.counters);
-    for (const c of counters) {
-      if (c.id == null) continue;
-      stmtCounter.run(
-        Number(c.id),
-        String(c.name || `Counter #${c.id}`),
-        c.type ? String(c.type) : null,
-        c.location ? String(c.location) : null,
-        c.active !== false ? 1 : 0,
-        c.price != null ? Number(c.price) : null,
-        c.ticketPrice != null ? Number(c.ticketPrice) : null,
-        c.counterNumber != null ? String(c.counterNumber) : null,
-        JSON.stringify(c)
-      );
-    }
-
-    // 5. Packages
-    const stmtPackage = db.prepare(`
-      INSERT OR REPLACE INTO packages (
-        id, name, price, category, description, active, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    const packages = normalizeEntityList(config.packages);
-    for (const p of packages) {
-      if (p.id == null) continue;
-      stmtPackage.run(
-        String(p.id),
-        String(p.name || 'Package'),
-        Number(p.price) || 0,
-        p.category ? String(p.category) : null,
-        p.description ? String(p.description) : null,
-        p.active !== false ? 1 : 0,
-        JSON.stringify(p)
-      );
-    }
-
-    // 6. Maintenance Tickets (Unpacked and normalized)
-    const stmtTicket = db.prepare(`
-      INSERT OR REPLACE INTO maintenance_tickets (
-        id, date, ride_id, ride_name, problem, status, priority, source,
-        reported_by_id, reported_by_name, reported_by_role, assigned_to_id, assigned_to_name,
-        helper_ids, helper_names, guest_details, reported_at, in_progress_at, solved_at,
-        resolution_notes, solution_image_url, photo_url, whatsapp_group, whatsapp_chat_id,
-        whatsapp_message_id, updated_at, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const tickets = extractAllTickets(data.maintenanceTickets, lastUpdated.slice(0, 10));
-    if (tickets.length === 0) {
-      db.exec('DELETE FROM maintenance_tickets;');
+    if (current.get('system_config')?.get('primary') === configHash) {
+      cachedStatement(db, 'UPDATE system_config SET version = ?, last_updated = ? WHERE id = ?').run(version, lastUpdated, 'primary');
     } else {
-      const activeIds = tickets.map(t => String(t.id)).filter(Boolean);
-      if (activeIds.length > 0) {
-        const placeholders = activeIds.map(() => '?').join(',');
-        db.prepare(`DELETE FROM maintenance_tickets WHERE id NOT IN (${placeholders})`).run(...activeIds);
-      }
-    }
-    for (const t of tickets) {
-      if (!t || !t.id) continue;
-      stmtTicket.run(
-        String(t.id),
-        String(t.date || lastUpdated.slice(0, 10)),
-        t.rideId != null ? Number(t.rideId) : null,
-        String(t.rideName || 'Unknown Ride'),
-        String(t.problem || ''),
-        String(t.status || 'reported'),
-        String(t.priority || 'normal'),
-        String(t.source || 'operator'),
-        t.reportedById != null ? Number(t.reportedById) : null,
-        t.reportedByName ? String(t.reportedByName) : null,
-        t.reportedByRole ? String(t.reportedByRole) : null,
-        t.assignedToId != null ? Number(t.assignedToId) : null,
-        t.assignedToName ? String(t.assignedToName) : null,
-        t.helperIds ? JSON.stringify(t.helperIds) : null,
-        t.helperNames ? JSON.stringify(t.helperNames) : null,
-        t.guestDetails ? String(t.guestDetails) : null,
-        String(t.reportedAt || lastUpdated),
-        t.inProgressAt ? String(t.inProgressAt) : null,
-        t.solvedAt ? String(t.solvedAt) : null,
-        t.resolutionNotes ? String(t.resolutionNotes) : null,
-        t.solutionImageUrl ? String(t.solutionImageUrl) : null,
-        t.photoUrl ? String(t.photoUrl) : null,
-        t.whatsappGroup ? String(t.whatsappGroup) : null,
-        t.whatsappChatId ? String(t.whatsappChatId) : null,
-        t.whatsappMessageId ? String(t.whatsappMessageId) : null,
-        t.updatedAt ? String(t.updatedAt) : lastUpdated,
-        JSON.stringify(t)
+      db.prepare(`
+        INSERT OR REPLACE INTO system_config (
+          id, version, last_updated, config_json, whatsapp_config, app_config, deleted_ticket_ids, deleted_wa_msg_ids, row_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'primary',
+        version,
+        lastUpdated,
+        configJson,
+        JSON.stringify(config.whatsappConfig || {}),
+        JSON.stringify(config.appConfig || {}),
+        JSON.stringify(config.deletedTicketIds || []),
+        JSON.stringify(config.deletedWhatsAppMessageIds || []),
+        configHash
       );
     }
+    next.set('system_config', new Map([['primary', configHash]]));
 
-    // 7. Date-Indexed Daily Operations
-    const stmtDailyOp = db.prepare(`
-      INSERT OR REPLACE INTO daily_operations (
-        operational_date, attendance, operator_assignments, ticket_sales_assignments, daily_counts, daily_package_counts, daily_ticket_counts, ticket_sales_data, package_sales, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    // A key seen twice in one save (same id under two dates or departments) ends with the last one, as before.
+    emitRows(appDb, lastUpdated, (table, key, hashSource, params) => {
+      const hash = rowHash(hashSource);
+      const seen = present.get(table)!;
+      const stored = current.get(table);
+      const had = seen.has(key) || Boolean(stored?.has(key));
+      if ((seen.has(key) ? seen.get(key) : stored?.get(key)) !== hash) {
+        if (table === 'history_logs' && had) deleteKey(table, key);
+        cachedStatement(db, INSERT_SQL[table]).run(...params, hash);
+      }
+      seen.set(key, hash);
+    });
 
-    const allDates = new Set<string>([
-      ...Object.keys(data.attendance || {}),
-      ...Object.keys(data.operatorAssignments || {}),
-      ...Object.keys(data.ticketSalesAssignments || {}),
-      ...Object.keys(data.dailyCounts || {}),
-      ...Object.keys(data.dailyPackageCounts || {}),
-      ...Object.keys(data.dailyTicketCounts || {}),
-      ...Object.keys(data.ticketSalesData || {}),
-      ...Object.keys(data.packageSales || {})
-    ]);
-
-    for (const date of allDates) {
-      stmtDailyOp.run(
-        date,
-        JSON.stringify(data.attendance?.[date] || {}),
-        JSON.stringify(data.operatorAssignments?.[date] || {}),
-        JSON.stringify(data.ticketSalesAssignments?.[date] || {}),
-        JSON.stringify(data.dailyCounts?.[date] || {}),
-        JSON.stringify(data.dailyPackageCounts?.[date] || {}),
-        JSON.stringify(data.dailyTicketCounts?.[date] || {}),
-        JSON.stringify(data.ticketSalesData?.[date] || {}),
-        JSON.stringify(data.packageSales?.[date] || {}),
-        lastUpdated
-      );
+    const kept: Record<string, number> = {};
+    for (const table of SYNCED_TABLES) {
+      const seen = present.get(table)!;
+      const deletable = deletableKeys.get(table);
+      const result = new Map<string, string | null>(seen);
+      for (const [key, h] of current.get(table) || []) {
+        if (seen.has(key)) continue;
+        if (deletable?.has(key)) {
+          deleteKey(table, key);
+        } else {
+          result.set(key, h);
+          kept[table] = (kept[table] || 0) + 1;
+        }
+      }
+      next.set(table, result);
     }
 
-    // 8. History Logs
-    if (Array.isArray(data.historyLog)) {
-      db.exec('DELETE FROM history_logs;');
-      const stmtHistory = db.prepare(`
-        INSERT INTO history_logs (log_id, timestamp, user_name, action, details)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      for (const h of data.historyLog) {
-        if (!h) continue;
-        stmtHistory.run(
-          h.id != null ? Number(h.id) : null,
-          String(h.timestamp || lastUpdated),
-          String(h.user || 'system'),
-          String(h.action || 'update'),
-          typeof h.details === 'object' ? JSON.stringify(h.details) : String(h.details || '')
-        );
-      }
-    }
-
-    // 9. WhatsApp Management Reports
-    if (data.whatsappManagementReports && typeof data.whatsappManagementReports === 'object') {
-      const stmtMgmtReport = db.prepare(`
-        INSERT OR REPLACE INTO whatsapp_management_reports (
-          report_date, timestamp, sender_name, sender_phone, group_name, kiddo_sale, xtreme_sale, vip_concierge_sale, entry_ticket_sale, total_foot_fall, discount, total_revenue, counter_breakdown_json, raw_message, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (const [rDate, rep] of Object.entries(data.whatsappManagementReports as Record<string, any>)) {
-        if (!rep || !rDate) continue;
-        const sr = rep.salesAndRevenue || {};
-        stmtMgmtReport.run(
-          rDate,
-          String(rep.timestamp || lastUpdated),
-          rep.senderName ? String(rep.senderName) : null,
-          rep.senderPhone ? String(rep.senderPhone) : null,
-          String(rep.groupName || 'TFW Management Team'),
-          Number(sr.toggiKiddoSale || 0),
-          Number(sr.toggiXtremeSale || 0),
-          Number(sr.toggiVipConciergeSale || 0),
-          Number(sr.entryTicketSale || 0),
-          Number(sr.totalFootFall || 0),
-          Number(sr.discount || 0),
-          Number(sr.totalRevenue || 0),
-          JSON.stringify(rep.counterBreakdown || []),
-          rep.rawMessage ? String(rep.rawMessage) : null,
-          JSON.stringify(rep)
-        );
-      }
+    if (!metaMarkerWritten) {
+      cachedStatement(db, 'INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)').run(JSON_DATES_MARKER, lastUpdated);
     }
 
     db.exec('COMMIT;');
+
+    storedHashes = next;
+    metaMarkerWritten = true;
+    for (const table of SYNCED_TABLES) {
+      let set = deletableKeys.get(table);
+      if (!set) deletableKeys.set(table, (set = new Set()));
+      for (const key of present.get(table)!.keys()) set.add(key);
+    }
+    for (const [table, n] of Object.entries(kept)) {
+      if (keptUnknownLogged.has(table)) continue;
+      keptUnknownLogged.add(table);
+      console.warn(`SQLite ${table}: kept ${n} row(s) that are not in memory and were never loaded by this process.`);
+    }
   } catch (err) {
     db.exec('ROLLBACK;');
+    storedHashes = null;
     console.error('Failed to save state to SQLite database:', err);
     throw err;
   }
@@ -538,6 +668,9 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
   }
 
   const db = getSqliteDatabase(dbPath);
+  lastLoadedKeys = null;
+  const loaded = new Map<string, Set<string>>(SYNCED_TABLES.map(t => [t, new Set<string>()]));
+  const markLoaded = (table: SyncedTable, key: any) => loaded.get(table)!.add(String(key));
 
   try {
     const configRow = db.prepare('SELECT * FROM system_config WHERE id = ?').get('primary') as any;
@@ -566,6 +699,7 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
           } catch {
             parsed = {};
           }
+          markLoaded('rides', r.id);
           rideMap[String(r.id)] = {
             id: r.id,
             name: r.name,
@@ -589,6 +723,7 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
           } catch {
             parsed = {};
           }
+          markLoaded('rides', r.id);
           return {
             id: r.id,
             name: r.name,
@@ -625,6 +760,8 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
         else if (s.department === 'sales') salesMap[String(s.id)] = item;
         else if (s.department === 'maintenance') maintMap[String(s.id)] = item;
         else if (s.department === 'cx') cxMap[String(s.id)] = item;
+        else continue;
+        markLoaded('staff', s.id);
       }
 
       if (Object.keys(opsMap).length) config.operators = opsMap;
@@ -638,6 +775,7 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
     if (countersRows && countersRows.length > 0) {
       const counterMap: Record<string, any> = {};
       for (const c of countersRows) {
+        markLoaded('counters', c.id);
         try {
           counterMap[String(c.id)] = c.raw_json ? JSON.parse(c.raw_json) : { id: c.id, name: c.name, active: !!c.active };
         } catch {
@@ -651,6 +789,7 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
     const packageRows = db.prepare('SELECT * FROM packages ORDER BY id ASC').all() as any[];
     if (packageRows && packageRows.length > 0) {
       config.packages = packageRows.map(p => {
+        markLoaded('packages', p.id);
         try {
           return p.raw_json ? JSON.parse(p.raw_json) : { id: p.id, name: p.name, price: p.price };
         } catch {
@@ -670,7 +809,7 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
       ticketSalesData: {},
       packageSales: {},
       maintenanceTickets: {},
-      historyLog: []
+      historyLog: {}
     };
 
     // Reconstruct Maintenance Tickets nested by date (matching app convention)
@@ -680,6 +819,7 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
       if (!data.maintenanceTickets[date]) {
         data.maintenanceTickets[date] = {};
       }
+      markLoaded('maintenance_tickets', t.id);
       try {
         data.maintenanceTickets[date][t.id] = t.raw_json ? JSON.parse(t.raw_json) : {
           id: t.id,
@@ -706,21 +846,24 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
       if (row.daily_ticket_counts) try { data.dailyTicketCounts[d] = JSON.parse(row.daily_ticket_counts); } catch {}
       if (row.ticket_sales_data) try { data.ticketSalesData[d] = JSON.parse(row.ticket_sales_data); } catch {}
       if (row.package_sales) try { data.packageSales[d] = JSON.parse(row.package_sales); } catch {}
+      if (DAILY_COLLECTIONS.some(coll => data[coll][d] !== undefined)) markLoaded('daily_operations', d);
     }
 
-    // History Logs
-    const historyRows = db.prepare('SELECT * FROM history_logs ORDER BY id ASC LIMIT 500').all() as any[];
-    data.historyLog = historyRows.map(h => {
+    // History Logs: the newest 500, keyed by id like the app writes them (data/historyLog/<Date.now()>)
+    const historyRows = db.prepare('SELECT * FROM history_logs ORDER BY COALESCE(log_id, id) DESC LIMIT 500').all() as any[];
+    for (const h of historyRows) {
       let details = h.details;
       try { details = JSON.parse(h.details); } catch {}
-      return {
-        id: h.log_id || h.id,
+      const id = h.log_id ?? h.id;
+      markLoaded('history_logs', id);
+      data.historyLog[String(id)] = {
+        id,
         timestamp: h.timestamp,
         user: h.user_name,
         action: h.action,
         details
       };
-    });
+    }
 
     // WhatsApp Management Reports
     data.whatsappManagementReports = {};
@@ -746,10 +889,12 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
             },
             counterBreakdown: row.counter_breakdown_json ? JSON.parse(row.counter_breakdown_json) : []
           };
+          markLoaded('whatsapp_management_reports', row.report_date);
         } catch {}
       }
     } catch (_) {}
 
+    lastLoadedKeys = loaded;
     return {
       version: Number(configRow.version) || 1,
       lastUpdated: String(configRow.last_updated),

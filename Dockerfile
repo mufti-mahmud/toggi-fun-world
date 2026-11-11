@@ -15,4 +15,4 @@ ENV PORT=3000
 EXPOSE 3000
 
 # A persistent volume mounted at /app/data hides the bundled data, so seed it on first start only.
-CMD ["sh", "-c", "mkdir -p /app/data && if [ ! -f /app/data/tfw.db ]; then cp -r /app/seed-data/. /app/data/; fi && exec npx tsx server.ts"]
+CMD ["sh", "-c", "mkdir -p /app/data && if [ ! -f /app/data/tfw.db ]; then cp -r /app/seed-data/. /app/data/; fi && exec node server.mjs"]

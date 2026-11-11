@@ -4,6 +4,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { storedImageInfo } from './imageFiles';
 
 export type ActivityLevel = 'info' | 'warn' | 'error';
 
@@ -111,6 +112,11 @@ function redact(text: string): string {
 // Photos are stored as data URLs; keep their size, not their bytes. Role passwords and pasted tokens are never kept.
 function shortenLongStrings(key: string, value: unknown) {
   if (key && SECRET_KEY.test(key) && value !== null && typeof value !== 'object' && value !== '') return '[redacted]';
+  if (typeof value === 'string' && value.length < 64 && dataDirPath) {
+    // Photos now stored in data/images keep the wording they had as data URLs.
+    const stored = storedImageInfo(path.join(dataDirPath, 'images'), value);
+    if (stored && stored.dataUrlLength > LONG_STRING_CHARS) return `[${stored.mime} ${Math.round(stored.dataUrlLength / 1024)} KB]`;
+  }
   if (typeof value === 'string' && value.length > LONG_STRING_CHARS) {
     return value.startsWith('data:') ? `[${value.slice(5, value.indexOf(';') > 0 ? value.indexOf(';') : 20)} ${Math.round(value.length / 1024)} KB]` : `${value.slice(0, LONG_STRING_CHARS)}… (${value.length} chars)`;
   }
