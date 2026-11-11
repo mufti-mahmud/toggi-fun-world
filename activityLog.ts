@@ -221,6 +221,47 @@ function pruneOldDays(): void {
   } catch { /* retried in 6 hours */ }
 }
 
+const STORED_PASSWORD_KEY = /password|passcode|recovery_?pin/i;
+const STORED_SECRET_RE = /("(?:[A-Za-z_]*(?:password|recoveryPin|recovery_pin)[A-Za-z_]*)"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|-?\d+)/gi;
+
+/** Builds before HEAD logged recovery PINs in plain text; rewrites those rows once. Returns the rows changed. */
+export function redactStoredSecretsOnce(): number {
+  if (!db) return 0;
+  db.exec('CREATE TABLE IF NOT EXISTS activity_meta (key TEXT PRIMARY KEY, value TEXT)');
+  if (db.prepare('SELECT 1 AS x FROM activity_meta WHERE key = ?').get('secrets_redacted_v1')) return 0;
+  flushActivityLog();
+  let changed = 0;
+  db.exec('PRAGMA secure_delete = ON');
+  try {
+    const rows = db.prepare("SELECT id, detail FROM activity_log WHERE detail LIKE '%ecoveryPin%' OR detail LIKE '%ecovery_pin%' OR detail LIKE '%assword%'").all() as any[];
+    const update = db.prepare('UPDATE activity_log SET detail = ? WHERE id = ?');
+    db.exec('BEGIN');
+    for (const r of rows) {
+      const before = String(r.detail ?? '');
+      let after: string;
+      try {
+        after = JSON.stringify(JSON.parse(before), (k, v) => (k && STORED_PASSWORD_KEY.test(k) && v !== null && typeof v !== 'object' && v !== '' ? '[redacted]' : v));
+      } catch {
+        // Details cut at MAX_DETAIL_CHARS are not valid JSON.
+        after = before.replace(STORED_SECRET_RE, '$1"[redacted]"');
+      }
+      if (after !== before) {
+        update.run(after, r.id);
+        changed++;
+      }
+    }
+    db.exec('INSERT OR REPLACE INTO activity_meta (key, value) VALUES (\'secrets_redacted_v1\', datetime(\'now\'))');
+    db.exec('COMMIT');
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+    throw err;
+  } finally {
+    db.exec('PRAGMA secure_delete = OFF');
+  }
+  return changed;
+}
+
 export interface ActivityEntry { id?: number; ts: string; category: string; action: string; actor: string; level: string; detail: string }
 
 /** One page of a day in time order: rows after afterId, at most limit of them. */

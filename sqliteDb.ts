@@ -701,7 +701,8 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
       console.warn(`SQLite ${table}: kept ${n} row(s) that are not in memory and were never loaded by this process.`);
     }
   } catch (err) {
-    db.exec('ROLLBACK;');
+    // SQLite has already rolled back on errors such as SQLITE_FULL; a second ROLLBACK would throw and hide err.
+    try { db.exec('ROLLBACK;'); } catch { /* already rolled back */ }
     storedHashes = null;
     console.error('Failed to save state to SQLite database:', err);
     throw err;
@@ -1026,4 +1027,26 @@ export function checkpointSqlite(mode: 'PASSIVE' | 'TRUNCATE' | 'FULL' = 'TRUNCA
     console.error('SQLite checkpoint error:', err);
     return { success: false, error: err.message };
   }
+}
+
+/** Rewrites the whole file so old row versions left in free pages and the WAL are gone. */
+export function vacuumSqlite(dbPath: string = DEFAULT_SQLITE_PATH): void {
+  const db = getSqliteDatabase(dbPath);
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  db.exec('VACUUM;');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  resetSqliteRowCache();
+}
+
+export function getAppMeta(key: string, dbPath: string = DEFAULT_SQLITE_PATH): string | null {
+  try {
+    const row = getSqliteDatabase(dbPath).prepare('SELECT value FROM app_meta WHERE key = ?').get(key) as any;
+    return row ? String(row.value ?? '') : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function setAppMeta(key: string, value: string, dbPath: string = DEFAULT_SQLITE_PATH): void {
+  getSqliteDatabase(dbPath).prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run(key, value);
 }

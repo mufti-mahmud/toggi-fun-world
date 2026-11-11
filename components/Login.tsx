@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Operator, AppConfig } from '../types';
+import { Operator, AppConfig, AuthStatus, StaffCredentialStatus } from '../types';
+import { roleLogin, staffSetup, staffReset, signInErrorText, type AuthResult } from '../authClient';
+import { database } from '../firebaseConfig';
 import { PasswordInput } from './PasswordInput';
 import { Shield, Users, KeyRound, Wrench, Smartphone, Sparkles, UserCheck, Briefcase, Eye, EyeOff, Lock, HeartHandshake, BarChart3, Maximize2, Minimize2, Tv } from 'lucide-react';
 import { 
@@ -15,10 +17,9 @@ interface Props {
   cxPersonnel?: Operator[];
   appLogo: string | null;
   appConfig?: AppConfig;
-  adminPassword?: string;
   connectionStatus?: 'connecting' | 'connected' | 'disconnected';
-  staffCredentials?: Record<string, { password: string; recoveryPin: string; createdAt: string; updatedAt?: string }>;
-  onSaveStaffCredentials?: (key: string, creds: { password: string; recoveryPin: string; createdAt: string; updatedAt?: string }) => Promise<void> | void;
+  staffCredentials?: Record<string, StaffCredentialStatus>;
+  authStatus?: AuthStatus | null;
 }
 
 const Login: React.FC<Props> = ({ 
@@ -31,7 +32,7 @@ const Login: React.FC<Props> = ({
   appConfig,
   connectionStatus = 'connected',
   staffCredentials,
-  onSaveStaffCredentials
+  authStatus
 }) => {
   const [soundArmed, setSoundArmed] = useState<boolean>(() => isAudioReady());
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -164,15 +165,7 @@ const Login: React.FC<Props> = ({
   const [isForgotMode, setIsForgotMode] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-
-  // Fallback local storage for staff credentials if not in server/Firebase
-  const [localStaffCreds, setLocalStaffCreds] = useState<Record<string, { password: string; recoveryPin: string; createdAt: string; updatedAt?: string }>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('TFW_STAFF_CREDENTIALS') || '{}');
-    } catch {
-      return {};
-    }
-  });
+  const [submitting, setSubmitting] = useState(false);
 
   // Active individual credential for the selected staff member (Games & Ride Associate)
   const staffCredentialKey = selectedRole === 'operator' && selectedUser 
@@ -180,8 +173,11 @@ const Login: React.FC<Props> = ({
     : '';
 
   const activeStaffCred = staffCredentialKey 
-    ? ((staffCredentials && staffCredentials[staffCredentialKey]) || localStaffCreds[staffCredentialKey]) 
+    ? (staffCredentials && staffCredentials[staffCredentialKey]) || null
     : null;
+
+  // Unknown (no server answer yet) counts as required, so the password panel is never skipped by mistake.
+  const infoDeskNeedsPassword = authStatus ? Boolean(authStatus.roles?.['information-desk']) : true;
 
   const isFirstTimeSetup = Boolean(staffCredentialKey && !activeStaffCred);
 
@@ -204,9 +200,6 @@ const Login: React.FC<Props> = ({
   const displayHeading = appConfig?.loginHeading || 'Sign In';
   const displaySubheading = appConfig?.loginSubheading || 'Select your profile to begin your shift';
   const displayOrg = appConfig?.orgName;
-  const expectedAdminPassword = appConfig?.adminPassword || 'admin79';
-  const expectedOpsPassword = appConfig?.operationOfficerPassword || 'ops79';
-  const expectedMaintenancePassword = appConfig?.maintenancePassword || 'maint';
 
   // Left Corner Logo Options: Tanvir Bashundhara Group (TBG)
   const leftLogo = appConfig?.loginLeftLogo || '/tbg-logo.svg';
@@ -231,10 +224,9 @@ const Login: React.FC<Props> = ({
     setIsForgotMode(false);
     setError('');
     setShowPassword(false);
-    if (newRole === 'information-desk') {
-      if (!appConfig?.infoDeskPassword) {
-        onLogin('information-desk', { id: 920, name: 'TFW Information Desk', role: 'TFW Information Desk' });
-      }
+    if (newRole === 'information-desk' && !infoDeskNeedsPassword) {
+      onLogin('information-desk', { id: 920, name: 'TFW Information Desk', role: 'TFW Information Desk' });
+      roleLogin({ role: 'information-desk', password: '' }).catch(() => {});
     }
   };
 
@@ -247,78 +239,49 @@ const Login: React.FC<Props> = ({
     setError('');
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setError('');
+    setSubmitting(true);
+    try {
+      await submitLogin();
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
+  const failWith = (r: AuthResult, wrongCredentials: string) => setError(signInErrorText(r, wrongCredentials));
+
+  const submitLogin = async () => {
     if (selectedRole === 'information-desk') {
-      const configuredPass = (appConfig?.infoDeskPassword || '').trim();
-      if (configuredPass) {
-        const passMatch =
-          password === configuredPass ||
-          password === 'info79' ||
-          password === expectedAdminPassword ||
-          password === 'admin79';
-        if (!passMatch) {
-          setError('Invalid Information Desk Password.');
-          return;
-        }
-      }
+      // Without a configured password the desk opens offline too, as before.
+      const r = infoDeskNeedsPassword ? await roleLogin({ role: 'information-desk', password }) : null;
+      if (!infoDeskNeedsPassword) roleLogin({ role: 'information-desk', password: '' }).catch(() => {});
+      if (r && !r.ok) return failWith(r, 'Invalid Information Desk Password.');
       onLogin('information-desk', { id: 920, name: 'TFW Information Desk', role: 'TFW Information Desk' });
       return;
     }
 
     if (selectedRole === 'admin') {
-      if (password === expectedAdminPassword || password === 'admin79') {
-        onLogin('admin', { id: 999, name: 'Administrator' });
-      } else {
-        setError(`Invalid Admin Password.`);
-      }
+      const r = await roleLogin({ role: 'admin', password });
+      if (!r.ok) return failWith(r, 'Invalid Admin Password.');
+      onLogin('admin', { id: 999, name: 'Administrator' });
     } else if (selectedRole === 'operation-officer') {
-      if (
-        password !== expectedOpsPassword && 
-        password !== 'ops79' && 
-        password !== expectedAdminPassword &&
-        password !== 'admin79'
-      ) {
-        setError('Invalid Operation Officer Password.');
-        return;
-      }
+      const r = await roleLogin({ role: 'operation-officer', password });
+      if (!r.ok) return failWith(r, 'Invalid Operation Officer Password.');
       onLogin('operation-officer', { id: 901, name: 'Operation Officer', role: 'Operation Officer' });
     } else if (selectedRole === 'maintenance') {
-      if (
-        password !== expectedMaintenancePassword && 
-        password !== 'maint' && 
-        password !== 'tech' && 
-        password !== 'maintenance' && 
-        password !== expectedAdminPassword &&
-        password !== 'admin79'
-      ) {
-        setError('Invalid Maintenance Password.');
-        return;
-      }
+      const r = await roleLogin({ role: 'maintenance', password });
+      if (!r.ok) return failWith(r, 'Invalid Maintenance Password.');
       onLogin('maintenance', { id: 903, name: 'Maintenance Engineer', role: 'Maintenance Engineer' });
     } else if (selectedRole === 'maintenance-kpi') {
-      const expectedKpiUser = (appConfig?.maintenanceKpiUser || 'kpi').trim().toLowerCase();
-      const expectedKpiPassword = (appConfig?.maintenanceKpiPassword || 'kpi123').trim();
-      const enteredUser = selectedUser.trim().toLowerCase();
-      const enteredPass = password.trim();
-
-      if (!enteredUser) {
+      if (!selectedUser.trim()) {
         setError('Please enter Maintenance KPI Dashboard User ID / Username.');
         return;
       }
-      const userMatches = enteredUser === expectedKpiUser || enteredUser === 'admin';
-      const passMatches =
-        enteredPass === expectedKpiPassword ||
-        enteredPass === 'kpi123' ||
-        enteredPass === expectedAdminPassword ||
-        enteredPass === 'admin79';
-
-      if (!userMatches || !passMatches) {
-        setError('Invalid Maintenance KPI Dashboard Username or Password.');
-        return;
-      }
+      const r = await roleLogin({ role: 'maintenance-kpi', user: selectedUser, password });
+      if (!r.ok) return failWith(r, 'Invalid Maintenance KPI Dashboard Username or Password.');
       try {
         sessionStorage.setItem('TFW_KPI_DASHBOARD_UNLOCKED', 'true');
       } catch {
@@ -330,30 +293,12 @@ const Login: React.FC<Props> = ({
         role: 'Maintenance KPI Dashboard'
       });
     } else if (selectedRole === 'management') {
-      const expectedManagementPassword = appConfig?.managementPassword || 'manage79';
-      if (
-        password !== expectedManagementPassword &&
-        password !== 'manage79' &&
-        password !== 'management79' &&
-        password !== expectedAdminPassword &&
-        password !== 'admin79'
-      ) {
-        setError('Invalid Management Password.');
-        return;
-      }
+      const r = await roleLogin({ role: 'management', password });
+      if (!r.ok) return failWith(r, 'Invalid Management Password.');
       onLogin('management', { id: 990, name: 'Management', role: 'Management' });
     } else if (selectedRole === 'cx') {
-      const expectedCxPassword = appConfig?.cxPassword || 'cx79';
-      if (
-        password !== expectedCxPassword &&
-        password !== 'cx79' &&
-        password !== 'cx123' &&
-        password !== expectedAdminPassword &&
-        password !== 'admin79'
-      ) {
-        setError('Invalid Customer Experience Password.');
-        return;
-      }
+      const r = await roleLogin({ role: 'cx', password });
+      if (!r.ok) return failWith(r, 'Invalid Customer Experience Password.');
       const cxMember = cxPersonnel.find(o => o.id.toString() === selectedUser);
       if (cxMember) {
         onLogin('cx', { ...cxMember, role: cxMember.role || 'Customer Experience (CX)' });
@@ -374,7 +319,7 @@ const Login: React.FC<Props> = ({
       }
 
       const credentialKey = `${selectedRole}_${selectedUser}`;
-      const activeCred = (staffCredentials && staffCredentials[credentialKey]) || localStaffCreds[credentialKey];
+      const activeCred = staffCredentials && staffCredentials[credentialKey];
 
       // 1. First-time setup: user sets their individual password and 4-digit security PIN
       if (!activeCred) {
@@ -395,23 +340,16 @@ const Login: React.FC<Props> = ({
           return;
         }
 
-        const newCred = {
-          password: password.trim(),
-          recoveryPin: recoveryPin.trim(),
-          createdAt: new Date().toISOString()
-        };
-
-        const updatedLocal = { ...localStaffCreds, [credentialKey]: newCred };
-        setLocalStaffCreds(updatedLocal);
-        try {
-          localStorage.setItem('TFW_STAFF_CREDENTIALS', JSON.stringify(updatedLocal));
-        } catch (err) {
-          console.error(err);
+        const r = await staffSetup(credentialKey, password, recoveryPin);
+        if (!r.ok) {
+          if (r.error === 'already_set') {
+            setError('A password was already created for this name. Enter it, or use "Forgot Password".');
+            database.engine.fetchFullDatabase();
+          } else {
+            failWith(r, 'Sign-in failed on the server. Try again.');
+          }
+          return;
         }
-        if (onSaveStaffCredentials) {
-          onSaveStaffCredentials(credentialKey, newCred);
-        }
-
         onLogin(selectedRole as any, foundStaff);
         return;
       }
@@ -420,10 +358,6 @@ const Login: React.FC<Props> = ({
       if (isForgotMode) {
         if (!recoveryPin.trim() || !/^\d{4}$/.test(recoveryPin.trim())) {
           setError('Please enter your 4-digit recovery number.');
-          return;
-        }
-        if (recoveryPin.trim() !== activeCred.recoveryPin) {
-          setError('Incorrect 4-digit security PIN. Please enter the number you set during your first setup.');
           return;
         }
         if (!password.trim()) {
@@ -439,35 +373,32 @@ const Login: React.FC<Props> = ({
           return;
         }
 
-        const updatedCred = {
-          password: password.trim(),
-          recoveryPin: activeCred.recoveryPin,
-          createdAt: activeCred.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-
-        const updatedLocal = { ...localStaffCreds, [credentialKey]: updatedCred };
-        setLocalStaffCreds(updatedLocal);
-        try {
-          localStorage.setItem('TFW_STAFF_CREDENTIALS', JSON.stringify(updatedLocal));
-        } catch (err) {
-          console.error(err);
+        const r = await staffReset(credentialKey, recoveryPin, password);
+        if (!r.ok) {
+          if (r.error === 'wrong_pin') setError('Incorrect 4-digit security PIN. Please enter the number you set during your first setup.');
+          else if (r.error === 'setup_required') {
+            setError('No password is set for this name yet. Create one below.');
+            database.engine.fetchFullDatabase();
+          } else failWith(r, 'Sign-in failed on the server. Try again.');
+          return;
         }
-        if (onSaveStaffCredentials) {
-          onSaveStaffCredentials(credentialKey, updatedCred);
-        }
-
         setIsForgotMode(false);
         onLogin(selectedRole as any, foundStaff);
         return;
       }
 
       // 3. Normal login: verify against individual password (or admin override)
-      if (password === activeCred.password || password === expectedAdminPassword || password === 'admin79') {
-        onLogin(selectedRole as any, foundStaff);
-      } else {
-        setError('Incorrect password. If you forgot your password, click "Forgot Password" below.');
+      const r = await roleLogin({ role: 'operator', staffKey: credentialKey, password });
+      if (!r.ok) {
+        if (r.error === 'setup_required') {
+          setError('No password is set for this name yet. Create one below.');
+          database.engine.fetchFullDatabase();
+        } else {
+          failWith(r, 'Incorrect password. If you forgot your password, click "Forgot Password" below.');
+        }
+        return;
       }
+      onLogin(selectedRole as any, foundStaff);
     }
   };
 
@@ -1163,7 +1094,7 @@ const Login: React.FC<Props> = ({
           )}
 
           {/* TFW Information Desk Password (if configured) */}
-          {selectedRole === 'information-desk' && Boolean(appConfig?.infoDeskPassword) && (
+          {selectedRole === 'information-desk' && infoDeskNeedsPassword && (
             <div className="space-y-3.5 p-4 bg-cyan-950/30 rounded-xl border border-cyan-700/50 animate-fade-in-up">
               <div className="flex items-center gap-2.5 text-cyan-300 pb-2 border-b border-cyan-800/40">
                 <div className="p-1.5 bg-cyan-900/60 rounded-lg border border-cyan-700/60 text-cyan-300">
@@ -1201,9 +1132,11 @@ const Login: React.FC<Props> = ({
             </div>
           )}
 
-          <button 
-            type="submit" 
-            className={`w-full py-3.5 rounded-xl font-bold text-white transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer ${
+          <button
+            type="submit"
+            disabled={submitting}
+            aria-busy={submitting}
+            className={`w-full py-3.5 rounded-xl font-bold text-white transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-wait ${
               selectedRole === 'admin' 
                 ? 'bg-purple-600 hover:bg-purple-500 shadow-purple-900/30' 
                 : selectedRole === 'management'

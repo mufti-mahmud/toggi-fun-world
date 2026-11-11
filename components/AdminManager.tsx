@@ -5,9 +5,12 @@ import {
   Counter, 
   PackageItem, 
   AppConfig,
+  AuthStatus,
+  RoleSecretKey,
   StaffRoleDefinition,
   SingleGnrRide
 } from '../types';
+import { changeRolePasswords } from '../authClient';
 import { 
   Sliders, 
   Plus, 
@@ -109,6 +112,7 @@ interface Props {
   onSaveFloors: (floors: string[]) => void;
   // App Config
   appConfig: AppConfig;
+  authStatus?: AuthStatus | null;
   onSaveAppConfig: (cfg: Partial<AppConfig>) => void;
   // Bulk Import
   onBulkImport?: (data: {
@@ -124,6 +128,13 @@ interface Props {
 }
 
 type TabType = 'rides' | 'counters' | 'operators' | 'sales-staff' | 'maintenance' | 'cx-staff' | 'packages' | 'single-gnr' | 'floors' | 'logo' | 'system' | 'developer-roles' | 'database';
+
+// Sits inside the input, so the labels wrap exactly as they did before the badge existed.
+const SecretBadge: React.FC<{ isSet?: boolean }> = ({ isSet }) => (
+  <span className={`absolute right-9 top-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap text-[10px] font-semibold px-1.5 py-0.5 rounded ${isSet ? 'bg-emerald-900/50 text-emerald-300' : 'bg-gray-700 text-gray-300'}`}>
+    {isSet ? 'Set' : 'Not set'}
+  </span>
+);
 
 export const AdminManager: React.FC<Props> = ({
   onClose,
@@ -154,6 +165,7 @@ export const AdminManager: React.FC<Props> = ({
   floors,
   onSaveFloors,
   appConfig,
+  authStatus,
   onSaveAppConfig,
   onBulkImport
 }) => {
@@ -220,15 +232,16 @@ export const AdminManager: React.FC<Props> = ({
   const [totalGuestsLabel, setTotalGuestsLabel] = useState(appConfig.totalGuestsLabel || 'Total Guests Today');
   const [totalTicketSalesLabel, setTotalTicketSalesLabel] = useState(appConfig.totalTicketSalesLabel || 'Total Ticket Sales Today');
   const [announcementText, setAnnouncementText] = useState(appConfig.announcementText || '');
-  const [adminPassword, setAdminPassword] = useState(appConfig.adminPassword || 'admin79');
-  const [operationOfficerPassword, setOperationOfficerPassword] = useState(appConfig.operationOfficerPassword || 'ops79');
+  // Passwords are never sent to the browser, so these fields only ever hold a new value to set; blank keeps the current one.
+  const [adminPassword, setAdminPassword] = useState('');
+  const [operationOfficerPassword, setOperationOfficerPassword] = useState('');
   const [githubUrl, setGithubUrl] = useState(appConfig.githubUrl || 'https://github.com');
-  const [maintenancePassword, setMaintenancePassword] = useState(appConfig.maintenancePassword || 'maint');
-  const [cxPassword, setCxPassword] = useState(appConfig.cxPassword || 'cx79');
+  const [maintenancePassword, setMaintenancePassword] = useState('');
+  const [cxPassword, setCxPassword] = useState('');
   const [infoDeskUser, setInfoDeskUser] = useState(appConfig.infoDeskUser || 'admin');
-  const [infoDeskEditPassword, setInfoDeskEditPassword] = useState(appConfig.infoDeskEditPassword || 'edit456');
-  const [infoDeskAddPassword, setInfoDeskAddPassword] = useState(appConfig.infoDeskAddPassword || 'toggi123');
-  const [infoDeskPassword, setInfoDeskPassword] = useState(appConfig.infoDeskPassword || '');
+  const [infoDeskEditPassword, setInfoDeskEditPassword] = useState('');
+  const [infoDeskAddPassword, setInfoDeskAddPassword] = useState('');
+  const [passwordFeedback, setPasswordFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [cutoffHour, setCutoffHour] = useState(appConfig.cutoffHour !== undefined ? appConfig.cutoffHour : 22);
   const [currency, setCurrency] = useState(appConfig.currency || 'BDT');
   const [showPassword, setShowPassword] = useState(false);
@@ -271,15 +284,8 @@ export const AdminManager: React.FC<Props> = ({
       if (appConfig.totalGuestsLabel !== undefined) setTotalGuestsLabel(appConfig.totalGuestsLabel);
       if (appConfig.totalTicketSalesLabel !== undefined) setTotalTicketSalesLabel(appConfig.totalTicketSalesLabel);
       if (appConfig.announcementText !== undefined) setAnnouncementText(appConfig.announcementText || '');
-      if (appConfig.adminPassword !== undefined) setAdminPassword(appConfig.adminPassword);
-      if (appConfig.operationOfficerPassword !== undefined) setOperationOfficerPassword(appConfig.operationOfficerPassword);
       if (appConfig.githubUrl !== undefined) setGithubUrl(appConfig.githubUrl);
-      if (appConfig.maintenancePassword !== undefined) setMaintenancePassword(appConfig.maintenancePassword);
-      if (appConfig.cxPassword !== undefined) setCxPassword(appConfig.cxPassword);
       if (appConfig.infoDeskUser !== undefined) setInfoDeskUser(appConfig.infoDeskUser);
-      if (appConfig.infoDeskEditPassword !== undefined) setInfoDeskEditPassword(appConfig.infoDeskEditPassword);
-      if (appConfig.infoDeskAddPassword !== undefined) setInfoDeskAddPassword(appConfig.infoDeskAddPassword);
-      if (appConfig.infoDeskPassword !== undefined) setInfoDeskPassword(appConfig.infoDeskPassword);
       if (appConfig.cutoffHour !== undefined) setCutoffHour(appConfig.cutoffHour);
       if (appConfig.currency !== undefined) setCurrency(appConfig.currency);
     }
@@ -319,6 +325,32 @@ export const AdminManager: React.FC<Props> = ({
     refreshCycleStats();
   }, [appConfig.cycleStartDate, appConfig.cycleIntervalMonths, appConfig.lastBackupDate, appConfig.lastCycleResetDate]);
 
+  // Role passwords go to the server, which stores only their hashes; the other settings are saved as before.
+  const savePasswordChanges = async () => {
+    const fields: Array<[RoleSecretKey, string, (v: string) => void]> = [
+      ['admin', adminPassword, setAdminPassword],
+      ['operation-officer', operationOfficerPassword, setOperationOfficerPassword],
+      ['maintenance', maintenancePassword, setMaintenancePassword],
+      ['cx', cxPassword, setCxPassword],
+      ['info-desk-edit', infoDeskEditPassword, setInfoDeskEditPassword],
+      ['info-desk-add', infoDeskAddPassword, setInfoDeskAddPassword]
+    ];
+    const changed = fields.filter(([, value]) => value.trim() !== '');
+    if (changed.length === 0) return;
+    const r = await changeRolePasswords(Object.fromEntries(changed.map(([key, value]) => [key, value])));
+    if (r.ok) {
+      changed.forEach(([, , clear]) => clear(''));
+      setPasswordFeedback({ ok: true, text: 'Passwords updated.' });
+    } else if (r.status === 403) {
+      setPasswordFeedback({ ok: false, text: 'Passwords were not changed: sign in again as Administrator.' });
+    } else if (r.status === 0) {
+      setPasswordFeedback({ ok: false, text: 'Passwords were not changed: cannot reach the server.' });
+    } else {
+      setPasswordFeedback({ ok: false, text: `Passwords were not changed (${r.error || 'server error'}).` });
+    }
+    setTimeout(() => setPasswordFeedback(null), 8000);
+  };
+
   // Master sync & publish to all connected devices anywhere
   const handleMasterPublish = async () => {
     setCloudSyncLoading(true);
@@ -344,15 +376,8 @@ export const AdminManager: React.FC<Props> = ({
         totalGuestsLabel: totalGuestsLabel.trim() || 'Total Guests Today',
         totalTicketSalesLabel: totalTicketSalesLabel.trim() || 'Total Ticket Sales Today',
         announcementText: announcementText.trim() || '',
-        adminPassword,
-        operationOfficerPassword,
         githubUrl: githubUrl.trim() || 'https://github.com',
-        maintenancePassword,
-        cxPassword,
         infoDeskUser: infoDeskUser.trim() || 'admin',
-        infoDeskEditPassword: infoDeskEditPassword.trim() || 'edit456',
-        infoDeskAddPassword: infoDeskAddPassword.trim() || 'toggi123',
-        infoDeskPassword: infoDeskPassword.trim(),
         cutoffHour: Number(cutoffHour),
         currency: currency.trim() || 'BDT',
         cycleStartDate: appConfig.cycleStartDate,
@@ -361,6 +386,8 @@ export const AdminManager: React.FC<Props> = ({
         lastBackupDate: appConfig.lastBackupDate,
         lastCycleResetDate: appConfig.lastCycleResetDate
       });
+
+      await savePasswordChanges();
 
       // 2. Direct cloud broadcast across all devices
       const res = await database.forceCloudSync();
@@ -606,10 +633,7 @@ export const AdminManager: React.FC<Props> = ({
       setTotalGuestsLabel(appConfig.totalGuestsLabel || 'Total Guests Today');
       setTotalTicketSalesLabel(appConfig.totalTicketSalesLabel || 'Total Ticket Sales Today');
       setAnnouncementText(appConfig.announcementText || '');
-      setAdminPassword(appConfig.adminPassword || 'admin');
-      setOperationOfficerPassword(appConfig.operationOfficerPassword || 'ops');
       setGithubUrl(appConfig.githubUrl || 'https://github.com');
-      setMaintenancePassword(appConfig.maintenancePassword || 'maint');
       setCutoffHour(appConfig.cutoffHour !== undefined ? appConfig.cutoffHour : 22);
       setCurrency(appConfig.currency || 'BDT');
       if (appConfig.singleGnrRides && Array.isArray(appConfig.singleGnrRides) && appConfig.singleGnrRides.length > 0) {
@@ -837,6 +861,12 @@ export const AdminManager: React.FC<Props> = ({
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
+        if (ctx) {
+          // JPEG has no alpha, so transparent PNG areas would otherwise turn black.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+        }
         const compressed = ctx ? canvas.toDataURL('image/jpeg', 0.85) : dataUrl;
         
         // Optimistically set the image
@@ -891,6 +921,12 @@ export const AdminManager: React.FC<Props> = ({
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
+        if (ctx) {
+          // JPEG has no alpha, so transparent PNG areas would otherwise turn black.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+        }
         const compressed = ctx ? canvas.toDataURL('image/jpeg', 0.85) : dataUrl;
 
         // Try direct server disk upload
@@ -933,6 +969,7 @@ export const AdminManager: React.FC<Props> = ({
 
   const handleSaveSystemConfig = (e: React.FormEvent) => {
     e.preventDefault();
+    savePasswordChanges();
     onSaveAppConfig({
       appName: appName.trim() || 'Tanvir Bashundhara Group',
       appSubtitle: appSubtitle.trim() || '',
@@ -952,15 +989,8 @@ export const AdminManager: React.FC<Props> = ({
       totalGuestsLabel: totalGuestsLabel.trim() || 'Total Guests Today',
       totalTicketSalesLabel: totalTicketSalesLabel.trim() || 'Total Ticket Sales Today',
       announcementText: announcementText.trim() || '',
-      adminPassword,
-      operationOfficerPassword,
       githubUrl: githubUrl.trim() || 'https://github.com',
-      maintenancePassword,
-      cxPassword,
       infoDeskUser: infoDeskUser.trim() || 'admin',
-      infoDeskEditPassword: infoDeskEditPassword.trim() || 'edit456',
-      infoDeskAddPassword: infoDeskAddPassword.trim() || 'toggi123',
-      infoDeskPassword: infoDeskPassword.trim(),
       cutoffHour: Number(cutoffHour),
       currency: currency.trim() || 'BDT'
     });
@@ -3136,6 +3166,11 @@ export const AdminManager: React.FC<Props> = ({
                   <span className="text-[11px] font-bold text-purple-400 uppercase tracking-wider block mb-3">
                     Portal Login Passwords
                   </span>
+                  {passwordFeedback && (
+                    <p role="status" className={`text-xs font-semibold mb-3 ${passwordFeedback.ok ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {passwordFeedback.text}
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                       <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider block mb-1.5">
@@ -3146,9 +3181,11 @@ export const AdminManager: React.FC<Props> = ({
                           type={showPassword ? 'text' : 'password'}
                           value={adminPassword}
                           onChange={(e) => setAdminPassword(e.target.value)}
-                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-purple-500/40 outline-none focus:border-purple-400"
-                          placeholder="Admin Password (admin79)"
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-purple-500/40 outline-none focus:border-purple-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
                         />
+                        <SecretBadge isSet={authStatus?.roles?.['admin']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
@@ -3168,9 +3205,11 @@ export const AdminManager: React.FC<Props> = ({
                           type={showPassword ? 'text' : 'password'}
                           value={operationOfficerPassword}
                           onChange={(e) => setOperationOfficerPassword(e.target.value)}
-                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-indigo-500/40 outline-none focus:border-indigo-400"
-                          placeholder="Operation Officer Password (ops79)"
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-indigo-500/40 outline-none focus:border-indigo-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
                         />
+                        <SecretBadge isSet={authStatus?.roles?.['operation-officer']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
@@ -3203,9 +3242,11 @@ export const AdminManager: React.FC<Props> = ({
                           type={showPassword ? 'text' : 'password'}
                           value={maintenancePassword}
                           onChange={(e) => setMaintenancePassword(e.target.value)}
-                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-amber-500/40 outline-none focus:border-amber-400"
-                          placeholder="Maintenance Password (maint)"
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-amber-500/40 outline-none focus:border-amber-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
                         />
+                        <SecretBadge isSet={authStatus?.roles?.['maintenance']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
@@ -3225,9 +3266,11 @@ export const AdminManager: React.FC<Props> = ({
                           type={showPassword ? 'text' : 'password'}
                           value={cxPassword}
                           onChange={(e) => setCxPassword(e.target.value)}
-                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-rose-500/40 outline-none focus:border-rose-400"
-                          placeholder="CX Password (cx79)"
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-rose-500/40 outline-none focus:border-rose-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
                         />
+                        <SecretBadge isSet={authStatus?.roles?.['cx']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
@@ -3247,9 +3290,11 @@ export const AdminManager: React.FC<Props> = ({
                           type={showPassword ? 'text' : 'password'}
                           value={infoDeskEditPassword}
                           onChange={(e) => setInfoDeskEditPassword(e.target.value)}
-                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-cyan-500/40 outline-none focus:border-cyan-400"
-                          placeholder="Edit Game Pass (edit456)"
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-cyan-500/40 outline-none focus:border-cyan-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
                         />
+                        <SecretBadge isSet={authStatus?.roles?.['info-desk-edit']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
@@ -3269,9 +3314,11 @@ export const AdminManager: React.FC<Props> = ({
                           type={showPassword ? 'text' : 'password'}
                           value={infoDeskAddPassword}
                           onChange={(e) => setInfoDeskAddPassword(e.target.value)}
-                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-cyan-500/40 outline-none focus:border-cyan-400"
-                          placeholder="Add Game Pass (toggi123)"
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-cyan-500/40 outline-none focus:border-cyan-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
                         />
+                        <SecretBadge isSet={authStatus?.roles?.['info-desk-add']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}

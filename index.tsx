@@ -17,6 +17,16 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       window.location.href = `/login?next=${encodeURIComponent(next)}`;
     }
   }
+  // A privileged action without a valid role session; App asks the user to sign in again.
+  if (response.status === 403) {
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(rawUrl, window.location.href);
+    if (url.origin === window.location.origin && url.pathname.startsWith('/api/')) {
+      response.clone().json()
+        .then((b: any) => { if (b?.error === 'role_session_required') window.dispatchEvent(new CustomEvent('tfw:role-session-required', { detail: b })); })
+        .catch(() => {});
+    }
+  }
   return response;
 };
 

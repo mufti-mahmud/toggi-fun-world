@@ -32,12 +32,8 @@ const EDITED_GAMES_STORAGE_KEY = 'toggi_edited_games_map_v1';
 const ADMIN_ADD_SESSION_KEY = 'toggi_admin_add_unlocked_v1';
 const ADMIN_EDIT_SESSION_KEY = 'toggi_admin_edit_unlocked_v1';
 
-// Separate Admin Credentials for Add Game vs Edit Game
-const DEFAULT_ADMIN_USER = 'admin';
-const ADD_GAME_PASS = 'toggi123';
-const EDIT_GAME_PASS = 'edit456';
-
 import { AppConfig } from '../types';
+import { roleLogin, signInErrorText } from '../authClient';
 
 interface KioskMonitorViewProps {
   onLogout?: () => void;
@@ -45,9 +41,6 @@ interface KioskMonitorViewProps {
 }
 
 export const KioskMonitorView: React.FC<KioskMonitorViewProps> = ({ onLogout, appConfig }) => {
-  const activeAdminUser = (appConfig?.infoDeskUser || DEFAULT_ADMIN_USER).trim();
-  const activeAddPass = (appConfig?.infoDeskAddPassword || ADD_GAME_PASS).trim();
-  const activeEditPass = (appConfig?.infoDeskEditPassword || EDIT_GAME_PASS).trim();
   // 1. Custom added games from localStorage
   const [customGames, setCustomGames] = useState<EnlistedItem[]>(() => {
     try {
@@ -269,23 +262,23 @@ export const KioskMonitorView: React.FC<KioskMonitorViewProps> = ({ onLogout, ap
     setFormGameDescBn(getGameBanglaDescription(selectedGame));
   };
 
-  // Handle Admin Login Submit (Separate Password for ADD vs EDIT)
-  const handleAdminLoginSubmit = (e: React.FormEvent) => {
+  // Handle Admin Login Submit (Separate Password for ADD vs EDIT); the server checks user and password.
+  const handleAdminLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanUser = loginUsername.trim().toLowerCase();
-    const userOk = cleanUser === activeAdminUser.toLowerCase() || cleanUser === 'admin';
-    const isAddPassMatch =
-      loginPassword === activeAddPass ||
-      loginPassword === ADD_GAME_PASS ||
-      loginPassword === appConfig?.adminPassword ||
-      loginPassword === 'admin79';
-    const isEditPassMatch =
-      loginPassword === activeEditPass ||
-      loginPassword === EDIT_GAME_PASS ||
-      loginPassword === appConfig?.adminPassword ||
-      loginPassword === 'admin79';
+    const action = pendingAdminAction;
+    if (!action) return;
+    const r = await roleLogin({
+      role: action === 'ADD' ? 'info-desk-add' : 'info-desk-edit',
+      user: loginUsername,
+      password: loginPassword,
+      purpose: 'unlock'
+    });
+    if (!r.ok) {
+      setLoginError(signInErrorText(r, action === 'EDIT' ? 'Invalid Username or Edit Game Password!' : 'Invalid Username or Add Game Password!'));
+      return;
+    }
 
-    if (pendingAdminAction === 'ADD' && userOk && isAddPassMatch) {
+    if (action === 'ADD') {
       setIsAddUnlocked(true);
       try {
         sessionStorage.setItem(ADMIN_ADD_SESSION_KEY, 'true');
@@ -294,7 +287,7 @@ export const KioskMonitorView: React.FC<KioskMonitorViewProps> = ({ onLogout, ap
       setLoginError('');
       openAddModalDirect();
       setPendingAdminAction(null);
-    } else if (pendingAdminAction === 'EDIT' && userOk && isEditPassMatch) {
+    } else {
       setIsEditUnlocked(true);
       try {
         sessionStorage.setItem(ADMIN_EDIT_SESSION_KEY, 'true');
@@ -303,12 +296,6 @@ export const KioskMonitorView: React.FC<KioskMonitorViewProps> = ({ onLogout, ap
       setLoginError('');
       openEditModalDirect();
       setPendingAdminAction(null);
-    } else {
-      setLoginError(
-        pendingAdminAction === 'EDIT'
-          ? `Invalid Username or Edit Game Password! (Default user: "${activeAdminUser}" | pass: "${activeEditPass}")`
-          : `Invalid Username or Add Game Password! (Default user: "${activeAdminUser}" | pass: "${activeAddPass}")`
-      );
     }
   };
 
@@ -890,17 +877,6 @@ export const KioskMonitorView: React.FC<KioskMonitorViewProps> = ({ onLogout, ap
               </span>
               .
             </p>
-
-            <div className="flex items-center justify-between text-[11px] text-slate-300 bg-slate-900/80 px-3 py-2 rounded-xl border border-slate-700/80">
-              <span className="font-mono">User: <strong className="text-cyan-300 font-bold">{activeAdminUser}</strong></span>
-              <span className="font-mono">
-                {pendingAdminAction === 'EDIT' ? (
-                  <>Edit Pass: <strong className="text-amber-300 font-bold">{activeEditPass}</strong></>
-                ) : (
-                  <>Add Pass: <strong className="text-amber-300 font-bold">{activeAddPass}</strong></>
-                )}
-              </span>
-            </div>
 
             {loginError && (
               <div className="p-2.5 rounded-xl bg-red-950/90 border border-red-500/50 text-xs text-red-200 font-semibold">

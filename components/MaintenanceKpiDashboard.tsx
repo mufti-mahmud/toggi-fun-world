@@ -41,6 +41,7 @@ import {
   X
 } from 'lucide-react';
 import { PasswordInput } from './PasswordInput';
+import { roleLogin, signInErrorText } from '../authClient';
 
 export interface TechnicalCategoryDef {
   id: string;
@@ -457,9 +458,8 @@ interface Props {
   onUpdateCustomCategories?: (categories: CustomTechnicalCategory[]) => void;
   onUpdateTicketCategory?: (ticket: MaintenanceTicket, newCategoryName: string) => void;
   kpiUsername?: string;
-  kpiPassword?: string;
-  onSaveKpiCredentials?: (username: string, password: string) => void;
-  onUpdateKpiCredentials?: (username: string, password: string) => void;
+  onSaveKpiCredentials?: (username: string, password: string) => Promise<boolean> | boolean | void;
+  onUpdateKpiCredentials?: (username: string, password: string) => Promise<boolean> | boolean | void;
   isAlreadyAuthenticated?: boolean;
   isKpiRolePreAuthenticated?: boolean;
 }
@@ -476,7 +476,6 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
   onUpdateCustomCategories,
   onUpdateTicketCategory,
   kpiUsername = 'kpi',
-  kpiPassword = 'kpi123',
   onSaveKpiCredentials,
   onUpdateKpiCredentials,
   isAlreadyAuthenticated,
@@ -503,17 +502,13 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
   const [authError, setAuthError] = useState<string>('');
   const [showCredentialsModal, setShowCredentialsModal] = useState<boolean>(false);
   const [newKpiUser, setNewKpiUser] = useState<string>(kpiUsername || 'kpi');
-  const [newKpiPass, setNewKpiPass] = useState<string>(kpiPassword || 'kpi123');
+  const [newKpiPass, setNewKpiPass] = useState<string>('');
   const [credSavedMsg, setCredSavedMsg] = useState<string>('');
 
-  const handleKpiLoginSubmit = (e: React.FormEvent) => {
+  const handleKpiLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const expectedUser = (kpiUsername || 'kpi').trim().toLowerCase();
-    const expectedPass = (kpiPassword || 'kpi123').trim();
-    if (
-      inputUsername.trim().toLowerCase() === expectedUser &&
-      inputPassword.trim() === expectedPass
-    ) {
+    const r = await roleLogin({ role: 'maintenance-kpi', user: inputUsername, password: inputPassword, purpose: 'unlock' });
+    if (r.ok) {
       setIsUnlocked(true);
       setAuthError('');
       try {
@@ -522,7 +517,7 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
         // ignore storage error
       }
     } else {
-      setAuthError('Invalid KPI Dashboard Username or Password. Please try again.');
+      setAuthError(signInErrorText(r, 'Invalid KPI Dashboard Username or Password. Please try again.'));
     }
   };
 
@@ -537,12 +532,13 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
     }
   };
 
-  const handleSaveKpiCredentials = (e: React.FormEvent) => {
+  const handleSaveKpiCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newKpiUser.trim() || !newKpiPass.trim()) return;
-    if (effectiveSaveCredentials) {
-      effectiveSaveCredentials(newKpiUser.trim(), newKpiPass.trim());
-    }
+    if (!newKpiUser.trim()) return;
+    // A blank password keeps the current one.
+    const saved = effectiveSaveCredentials ? await effectiveSaveCredentials(newKpiUser.trim(), newKpiPass.trim()) : false;
+    if (saved === false) return;
+    setNewKpiPass('');
     setCredSavedMsg('KPI Dashboard User & Password updated!');
     setTimeout(() => {
       setCredSavedMsg('');
@@ -1547,7 +1543,7 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
               type="button"
               onClick={() => {
                 setNewKpiUser(kpiUsername || 'kpi');
-                setNewKpiPass(kpiPassword || 'kpi123');
+                setNewKpiPass('');
                 setShowCredentialsModal(prev => !prev);
               }}
               className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-750 text-amber-300 hover:text-amber-200 font-semibold px-3 py-2 rounded-xl text-xs border border-gray-700 transition-all cursor-pointer"
@@ -1637,10 +1633,9 @@ export const MaintenanceKpiDashboard: React.FC<Props> = ({
                 </label>
                 <input
                   type="text"
-                  required
                   value={newKpiPass}
                   onChange={e => setNewKpiPass(e.target.value)}
-                  placeholder="e.g. kpi123"
+                  placeholder="Leave blank to keep current"
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-amber-500"
                 />
               </div>
