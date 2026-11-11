@@ -6241,6 +6241,9 @@ export const EditImageModal = ({ ride, onClose, onSave }: any) => {
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (ctx) {
+          // JPEG has no alpha, so transparent PNG areas would otherwise turn black.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
           const compressed = canvas.toDataURL('image/jpeg', 0.88);
           setImagePreview(compressed);
@@ -6655,9 +6658,9 @@ export const CustomerExperienceView: React.FC<CXFeedbackViewProps> = ({
         undefined,
         feedbackTargetDept
       );
-      // Immediately sync with mobile and all connected devices
+      // Immediately sync with mobile and all connected devices; a date is shared by the Sync button alone.
       try {
-        await database.syncViewEverywhere(selectedDate, 'cx-feedback', { portalType: 'cx' });
+        await database.syncViewEverywhere(undefined, 'cx-feedback', { portalType: 'cx' });
         await database.engine.fetchFullDatabase();
       } catch (_) {}
 

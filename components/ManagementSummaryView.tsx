@@ -54,6 +54,7 @@ import {
 } from '../types';
 import { parseManagementReportText, ALL_TFW_LEVELS, normalizeCounterName } from '../utils/whatsappManagementParser';
 import { formatDhakaTime, getDhakaDateString } from '../constants';
+import { shiftDateKey, isDateKey } from '../utils/workingDate';
 
 const normalizeAssigneeIds = (raw: any): number[] => {
   if (!raw) return [];
@@ -454,12 +455,7 @@ export const ManagementSummaryView: React.FC<Props> = ({
 
   // Day navigation helpers
   const handleShiftDay = (delta: number) => {
-    const parts = selectedDate.split('-').map(Number);
-    if (parts.length === 3) {
-      const d = new Date(parts[0], parts[1] - 1, parts[2]);
-      d.setDate(d.getDate() + delta);
-      onDateChange(getDhakaDateString(d));
-    }
+    if (isDateKey(selectedDate)) onDateChange(shiftDateKey(selectedDate, delta));
   };
 
   // -------------------------------------------------------------

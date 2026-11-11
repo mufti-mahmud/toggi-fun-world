@@ -486,8 +486,9 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     setActivePortal(targetPortal);
     onSwitchPortal?.(targetPortal);
     try {
+      // Switching portal moves other devices' view only; a date is shared by the Sync button alone.
       database.syncViewEverywhere(
-        selectedDate,
+        undefined,
         targetPortal === 'cx' ? 'cx-feedback' : 'maintenance-dashboard',
         {
           portalType: targetPortal,

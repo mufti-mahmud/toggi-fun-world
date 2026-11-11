@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, ChevronLeft, ChevronRight, History, Copy, CheckCircle2, AlertCircle, Radio, RefreshCw } from 'lucide-react';
 import { getLocalDateString, getDhakaDateString, formatDhakaTime } from '../constants';
+import { shiftDateKey, isDateKey } from '../utils/workingDate';
 
 interface Props {
   selectedDate: string;
@@ -43,12 +44,7 @@ export const DateNavigationBar: React.FC<Props> = ({
 
   // Calculate Yesterday in Dhaka time
   const getYesterdayDate = () => {
-    const parts = today.split('-').map(Number);
-    if (parts.length === 3) {
-      const d = new Date(parts[0], parts[1] - 1, parts[2]);
-      d.setDate(d.getDate() - 1);
-      return getDhakaDateString(d);
-    }
+    if (isDateKey(today)) return shiftDateKey(today, -1);
     const d = new Date();
     d.setDate(d.getDate() - 1);
     return getDhakaDateString(d);
@@ -58,12 +54,7 @@ export const DateNavigationBar: React.FC<Props> = ({
 
   // Step one day back / forward
   const handleShiftDay = (delta: number) => {
-    const parts = selectedDate.split('-').map(Number);
-    if (parts.length === 3) {
-      const d = new Date(parts[0], parts[1] - 1, parts[2]);
-      d.setDate(d.getDate() + delta);
-      onDateChange(getDhakaDateString(d));
-    }
+    if (isDateKey(selectedDate)) onDateChange(shiftDateKey(selectedDate, delta));
   };
 
   // Format nice human-readable date
