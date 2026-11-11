@@ -3,8 +3,8 @@ import type express from 'express';
 
 const COOKIE_NAME = 'tfw_session';
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SESSION_DAYS = 30;
-const REFRESH_BELOW_DAYS = 15;
+const SESSION_DAYS = 60;
+const REFRESH_BELOW_DAYS = 30;
 const MAX_FAILED_ATTEMPTS = 10;
 const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 
