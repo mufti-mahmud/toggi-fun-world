@@ -12,6 +12,7 @@ import {
   DEFAULT_APP_CONFIG
 } from './constants';
 import { playReportedIssueSound } from './utils/soundAlerts';
+import { filterSecretWrite, pathSegments, publicStaffEntry, scrubClientDb } from './authShared';
 
 export const isFirebaseConfigured = true; // Local SQLite database persistence is active
 export const isDatabaseConfigured = true;
@@ -32,7 +33,85 @@ const DELTA_APPLIED_TYPES = new Set([
 const SETTLE_QUIET_MS = 15000;
 const SETTLE_MAX_WAIT_MS = 60000;
 
+// Device clocks can be a day off (flat battery, NTP off), so the working day follows the server's clock.
+let serverClockOffsetMs = 0;
+const serverClockListeners = new Set<() => void>();
+export const serverNow = (): number => Date.now() + serverClockOffsetMs;
+export const onServerClockChange = (listener: () => void): (() => void) => {
+  serverClockListeners.add(listener);
+  return () => { serverClockListeners.delete(listener); };
+};
+const noteServerTime = (serverIso: unknown, sentAt: number, receivedAt: number) => {
+  const serverMs = typeof serverIso === 'string' ? Date.parse(serverIso) : NaN;
+  if (Number.isNaN(serverMs) || receivedAt - sentAt > 10000) return;
+  const measured = serverMs - (sentAt + receivedAt) / 2;
+  // Round-trip jitter is a few seconds at most; only a real clock error should move the device's day.
+  const next = Math.abs(measured) < 5000 ? 0 : measured;
+  if (Math.abs(next - serverClockOffsetMs) < 5000) return;
+  serverClockOffsetMs = next;
+  serverClockListeners.forEach(listener => { try { listener(); } catch { /* ignore */ } });
+};
+
 type ValueCallback = (snapshot: { val: () => any }) => void;
+
+const isPlainObject = (v: any) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// Delta from the server or from another tab (possibly an old bundle): secrets are dropped, public fields kept.
+function sanitizeDeltaValue(path: string, value: any): { drop: true } | { drop: false; value: any } {
+  const seg = pathSegments(path);
+  if (seg[0] === 'config' && seg[1] === 'authStatus') return seg.length === 2 ? { drop: false, value } : { drop: true };
+  if (seg[0] === 'data' && seg[1] === 'staffCredentials') {
+    if (seg.length === 2) {
+      const out: Record<string, any> = {};
+      if (isPlainObject(value)) for (const [k, c] of Object.entries(value)) if (isPlainObject(c)) out[k] = publicStaffEntry(c);
+      return { drop: false, value: out };
+    }
+    if (seg.length === 3) return value == null ? { drop: false, value } : isPlainObject(value) ? { drop: false, value: publicStaffEntry(value) } : { drop: true };
+    return { drop: true };
+  }
+  const f = filterSecretWrite(seg, value);
+  return f.skip ? { drop: true } : { drop: false, value: f.value };
+}
+
+function sanitizeDelta(msg: any): any {
+  let out = msg;
+  if (typeof msg.path === 'string') {
+    const f = sanitizeDeltaValue(msg.path, msg.value);
+    if (f.drop) return null;
+    if (f.value !== msg.value) out = { ...out, value: f.value };
+  }
+  if (isPlainObject(msg.updates)) {
+    const updates: Record<string, any> = {};
+    for (const [p, v] of Object.entries(msg.updates)) {
+      const f = sanitizeDeltaValue(p, v);
+      if (!f.drop) updates[p] = f.value;
+    }
+    if (Object.keys(updates).length === 0 && Object.keys(msg.updates).length > 0) return null;
+    out = { ...out, updates };
+  }
+  return out;
+}
+
+// Queued offline writes saved by an older build can hold passwords; those writes are dropped or stripped.
+function sanitizeQueuedMutation(item: any): any {
+  if (!item || typeof item !== 'object') return null;
+  if (typeof item.path === 'string') {
+    const f = filterSecretWrite(pathSegments(item.path), item.type === 'remove' ? null : item.value);
+    if (f.skip) return null;
+    if (item.type === 'set' && f.value !== item.value) item = { ...item, value: f.value };
+  }
+  if (item.type === 'update' && isPlainObject(item.updates)) {
+    const updates: Record<string, any> = {};
+    for (const [key, value] of Object.entries(item.updates)) {
+      const full = !key.startsWith('data/') && !key.startsWith('config/') && item.basePath ? `${item.basePath}/${key}` : key;
+      const f = filterSecretWrite(pathSegments(full), value);
+      if (!f.skip) updates[key] = f.value;
+    }
+    if (Object.keys(updates).length === 0) return null;
+    item = { ...item, updates };
+  }
+  return item;
+}
 
 interface QueuedMutation {
   id: string;
@@ -112,6 +191,7 @@ class ServerDatabaseEngine {
     } catch (e) {
       console.warn('Could not read from localStorage:', e);
     }
+    this.purgeStoredSecrets();
 
     // Initialize BroadcastChannel for 0ms cross-tab real-time sync in the same browser
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -180,6 +260,12 @@ class ServerDatabaseEngine {
         if (e.key === 'TFW_PERSISTENT_DB' && e.newValue) {
           try {
             const parsed = JSON.parse(e.newValue);
+            // A tab still running the old bundle writes passwords back; clean them out of both copies again.
+            if (scrubClientDb(parsed)) {
+              const clean = JSON.stringify(parsed);
+              localStorage.setItem('TFW_PERSISTENT_DB', clean);
+              localStorage.setItem('TFW_PERSISTENT_DB_FALLBACK', clean);
+            }
             if (parsed && (!parsed.version || parsed.version >= this.dbVersion)) {
               this.cache = parsed;
               this.dbVersion = Math.max(parsed.version || 1, this.dbVersion);
@@ -212,6 +298,38 @@ class ServerDatabaseEngine {
         this.checkServerVersion();
       }
     }, 1500);
+  }
+
+  // Builds before server-checked passwords kept role passwords and staff PINs on every device.
+  private purgeStoredSecrets() {
+    try {
+      // Both copies are rewritten from the cleaned cache: the fallback copy can differ from the main one.
+      if (this.cache && Object.keys(this.cache).length > 0) this.saveToLocalStorage();
+      else {
+        for (const key of ['TFW_PERSISTENT_DB', 'TFW_PERSISTENT_DB_FALLBACK']) {
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (scrubClientDb(parsed)) localStorage.setItem(key, JSON.stringify(parsed));
+          } catch (_) {
+            localStorage.removeItem(key);
+          }
+        }
+      }
+      const queue = Array.isArray(this.offlineQueue) ? this.offlineQueue : [];
+      this.offlineQueue = queue.map(sanitizeQueuedMutation).filter(Boolean);
+      this.saveOfflineQueue();
+      localStorage.removeItem('TFW_STAFF_CREDENTIALS');
+      const legacyKeys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('tfw_cache_')) legacyKeys.push(k);
+      }
+      legacyKeys.forEach(k => localStorage.removeItem(k));
+    } catch (e) {
+      console.warn('Could not clean stored passwords from this device:', e);
+    }
   }
 
   private updateConnectionState() {
@@ -455,6 +573,7 @@ class ServerDatabaseEngine {
 
   private async checkServerVersion() {
     try {
+      const sentAt = Date.now();
       const res = await fetch(`/api/health?_t=${Date.now()}`, {
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache' }
@@ -462,11 +581,10 @@ class ServerDatabaseEngine {
       if (res.ok) {
         this.isServerApiAvailable = true;
         this.sseFailCount = 0;
+        // One failed check marks the stream down; without this the tab re-downloads everything every 1.5 s until it writes.
+        if (this.sse && this.sse.readyState === EventSource.OPEN && Date.now() - this.lastSsePingTime < 12000) this.isSseConnected = true;
         const json = await res.json();
-        if (json.activeOperationalDate && json.activeOperationalDate !== this.cache?.config?.appConfig?.activeOperationalDate) {
-          this.setValueLocal('config/appConfig/activeOperationalDate', json.activeOperationalDate);
-          this.notifyPathListeners('config/appConfig');
-        }
+        noteServerTime(json.time, sentAt, Date.now());
         if (
           (json.dbVersion && json.dbVersion !== this.dbVersion) ||
           (json.dbLastUpdated && this.cache?.lastUpdated && json.dbLastUpdated !== this.cache.lastUpdated) ||
@@ -552,8 +670,10 @@ class ServerDatabaseEngine {
   }
 
   private enqueueOfflineMutation(mutation: Omit<QueuedMutation, 'id' | 'timestamp'>) {
+    const clean = sanitizeQueuedMutation(mutation);
+    if (!clean) return;
     const item: QueuedMutation = {
-      ...mutation,
+      ...clean,
       id: 'mut_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
       timestamp: Date.now()
     };
@@ -601,10 +721,6 @@ class ServerDatabaseEngine {
     if (!msg || typeof msg !== 'object') return;
 
     if (msg.type === 'connected') {
-      if (msg.activeDate && msg.activeDate !== this.cache?.config?.appConfig?.activeOperationalDate) {
-        this.setValueLocal('config/appConfig/activeOperationalDate', msg.activeDate);
-        this.notifyPathListeners('config/appConfig');
-      }
       if (!this.cache?.data || !this.dbVersion || (msg.version && msg.version !== this.dbVersion) || (msg.lastUpdated && msg.lastUpdated !== this.cache?.lastUpdated)) {
         this.fetchFullDatabase();
       }
@@ -613,10 +729,6 @@ class ServerDatabaseEngine {
 
     if (msg.type === 'ping') {
       this.lastSsePingTime = Date.now();
-      if (msg.activeDate && msg.activeDate !== this.cache?.config?.appConfig?.activeOperationalDate) {
-        this.setValueLocal('config/appConfig/activeOperationalDate', msg.activeDate);
-        this.notifyPathListeners('config/appConfig');
-      }
       if (msg.version && this.dbVersion && msg.version !== this.dbVersion) {
         this.debouncedFetchFullDatabase();
       }
@@ -637,6 +749,10 @@ class ServerDatabaseEngine {
         this.lastOwnWriteAt = Date.now();
         return;
       }
+      // The ticket itself arrived in the set/update delta just before this alert; a full download per open tab per
+      // report overloaded the server in a 150-device load test.
+      if (msg.version) this.dbVersion = Math.max(this.dbVersion, msg.version);
+      return;
     }
 
     // Echo suppression: If this client initiated the mutation, local cache was already optimistically updated
@@ -645,6 +761,9 @@ class ServerDatabaseEngine {
       this.lastOwnWriteAt = Date.now();
       return;
     }
+
+    msg = sanitizeDelta(msg);
+    if (!msg) return;
 
     const { type, path, value, delta, updates, date, version } = msg;
     const isExplicitReopen = Boolean(msg.isExplicitReopen || updates?.isExplicitReopen);
@@ -921,9 +1040,6 @@ class ServerDatabaseEngine {
         break;
       }
       case 'connected': {
-        if (msg.activeDate) {
-          this.setValueLocal('config/appConfig/activeOperationalDate', msg.activeDate);
-        }
         if (msg.activeView) {
           this.setValueLocal('config/appConfig/activeView', msg.activeView);
         }
@@ -936,7 +1052,7 @@ class ServerDatabaseEngine {
         if (msg.maintenanceViewScope) {
           this.setValueLocal('config/appConfig/activeMaintenanceViewScope', msg.maintenanceViewScope);
         }
-        if (msg.activeDate || msg.activeView || msg.maintenancePortal || msg.maintenanceStatusTab || msg.maintenanceViewScope) {
+        if (msg.activeView || msg.maintenancePortal || msg.maintenanceStatusTab || msg.maintenanceViewScope) {
           this.notifyPathListeners('config/appConfig');
           this.notifyPathListeners('config');
         }
@@ -946,9 +1062,6 @@ class ServerDatabaseEngine {
         break;
       }
       case 'sync': {
-        if (msg.activeDate) {
-          this.setValueLocal('config/appConfig/activeOperationalDate', msg.activeDate);
-        }
         if (msg.activeView) {
           this.setValueLocal('config/appConfig/activeView', msg.activeView);
         }
@@ -961,7 +1074,7 @@ class ServerDatabaseEngine {
         if (msg.maintenanceViewScope) {
           this.setValueLocal('config/appConfig/activeMaintenanceViewScope', msg.maintenanceViewScope);
         }
-        if (msg.activeDate || msg.activeView || msg.maintenancePortal || msg.maintenanceStatusTab || msg.maintenanceViewScope) {
+        if (msg.activeView || msg.maintenancePortal || msg.maintenanceStatusTab || msg.maintenanceViewScope) {
           this.notifyPathListeners('config/appConfig');
           this.notifyPathListeners('config');
         }
@@ -1009,8 +1122,14 @@ class ServerDatabaseEngine {
   }
 
   private mergeDatabases(localDb: any, serverDb: any): { merged: any; shouldPushToServer: boolean } {
-    if (!localDb || typeof localDb !== 'object') return { merged: serverDb, shouldPushToServer: false };
-    if (!serverDb || typeof serverDb !== 'object') return { merged: localDb, shouldPushToServer: true };
+    if (!localDb || typeof localDb !== 'object') {
+      scrubClientDb(serverDb);
+      return { merged: serverDb, shouldPushToServer: false };
+    }
+    if (!serverDb || typeof serverDb !== 'object') {
+      scrubClientDb(localDb);
+      return { merged: localDb, shouldPushToServer: true };
+    }
 
     let shouldPushToServer = false;
     // version and lastUpdated must be the server's: the 1.5 s health check compares them to decide whether to re-download.
@@ -1253,6 +1372,8 @@ class ServerDatabaseEngine {
       shouldPushToServer = true;
     }
 
+    // The local copy can still hold passwords an older build cached; they must not survive the merge.
+    scrubClientDb(merged);
     return { merged, shouldPushToServer };
   }
 
@@ -1312,6 +1433,7 @@ class ServerDatabaseEngine {
 
   private saveToLocalStorage() {
     try {
+      scrubClientDb(this.cache);
       const serialized = JSON.stringify(this.cache);
       localStorage.setItem('TFW_PERSISTENT_DB', serialized);
       localStorage.setItem('TFW_PERSISTENT_DB_FALLBACK', serialized);
@@ -1423,14 +1545,9 @@ class ServerDatabaseEngine {
       portalType?: string;
       statusTab?: string;
       viewScope?: string;
+      sharedBy?: string;
     }
   ): Promise<boolean> {
-    if (activeDate) {
-      this.setValueLocal('config/appConfig/activeOperationalDate', activeDate);
-      if (!this.cache.config) this.cache.config = {};
-      if (!this.cache.config.appConfig) this.cache.config.appConfig = {};
-      this.cache.config.appConfig.activeOperationalDate = activeDate;
-    }
     if (activeView) {
       this.setValueLocal('config/appConfig/activeView', activeView);
       if (!this.cache.config) this.cache.config = {};
@@ -1472,6 +1589,9 @@ class ServerDatabaseEngine {
           body: JSON.stringify({
             db: this.cache,
             activeDate,
+            // The server stamps the shared date with its own Dhaka day; older bundles send activeDate alone.
+            shareDate: Boolean(activeDate),
+            sharedBy: extraParams?.sharedBy,
             activeView,
             maintenancePortal: extraParams?.portalType,
             maintenanceStatusTab: extraParams?.statusTab,
@@ -1613,6 +1733,12 @@ class ServerDatabaseEngine {
   // 1. Optimistic set with cloud persistence & multi-device sync
   public async set(path: string, value: any) {
     const norm = this.normalizePath(path);
+    const filtered = filterSecretWrite(pathSegments(norm), value);
+    if (filtered.skip) {
+      console.warn(`Not saved: ${norm} holds passwords, which are changed through the server only.`);
+      return;
+    }
+    value = filtered.value;
     this.lastLocalEditTime = Date.now();
     this.setValueLocal(norm, value);
     this.dbVersion = (this.dbVersion || 1) + 1;
@@ -1647,6 +1773,8 @@ class ServerDatabaseEngine {
           if (data.version) this.dbVersion = data.version;
           this.isSseConnected = true;
           this.updateConnectionState();
+        } else if (res.status === 403) {
+          this.fetchFullDatabase();
         } else if (res.status === 404) {
           this.isServerApiAvailable = false;
         }
@@ -1662,6 +1790,7 @@ class ServerDatabaseEngine {
   // into consolidated atomic requests while updating the local UI with 0ms perceived lag.
   public async increment(path: string, delta: number = 1, min: number = 0) {
     const norm = this.normalizePath(path);
+    if (filterSecretWrite(pathSegments(norm), 0).skip) return;
     this.lastLocalEditTime = Date.now();
     this.clientOpsCounter++;
     const currentVal = Number(this.getValue(norm)) || 0;
@@ -1998,9 +2127,15 @@ class ServerDatabaseEngine {
         fullPath = normBase ? `${normBase}/${key}` : key;
       }
       fullPath = this.normalizePath(fullPath);
-      formattedUpdates[fullPath] = value;
-      this.setValueLocal(fullPath, value, isExplicitReopen);
+      const filtered = filterSecretWrite(pathSegments(fullPath), value);
+      if (filtered.skip) {
+        console.warn(`Not saved: ${fullPath} holds passwords, which are changed through the server only.`);
+        continue;
+      }
+      formattedUpdates[fullPath] = filtered.value;
+      this.setValueLocal(fullPath, filtered.value, isExplicitReopen);
     }
+    if (Object.keys(formattedUpdates).length === 0) return;
 
     this.dbVersion = (this.dbVersion || 1) + 1;
     this.lastOwnWriteAt = Date.now();
@@ -2034,6 +2169,8 @@ class ServerDatabaseEngine {
           if (data.version) this.dbVersion = data.version;
           this.isSseConnected = true;
           this.updateConnectionState();
+        } else if (res.status === 403) {
+          this.fetchFullDatabase();
         } else if (res.status === 404) {
           this.isServerApiAvailable = false;
         }
@@ -2054,6 +2191,10 @@ class ServerDatabaseEngine {
         const targetId = parts[3];
         return this.deleteMaintenanceTicket(targetId, targetDate);
       }
+    }
+    if (filterSecretWrite(pathSegments(norm), null).skip) {
+      console.warn(`Not removed: ${norm} holds passwords, which are changed through the server only.`);
+      return;
     }
     this.lastLocalEditTime = Date.now();
     this.setValueLocal(norm, null);
@@ -2087,6 +2228,8 @@ class ServerDatabaseEngine {
           if (data.version) this.dbVersion = data.version;
           this.isSseConnected = true;
           this.updateConnectionState();
+        } else if (res.status === 403) {
+          this.fetchFullDatabase();
         } else if (res.status === 404) {
           this.isServerApiAvailable = false;
         }
@@ -2111,6 +2254,8 @@ class ServerDatabaseEngine {
     if (!Array.isArray(this.cache.config.deletedWhatsAppMessageIds)) this.cache.config.deletedWhatsAppMessageIds = [];
     if (!Array.isArray(this.cache.config.deletedTicketSignatures)) this.cache.config.deletedTicketSignatures = [];
 
+    const idsBefore = new Set<string>(this.cache.config.deletedTicketIds);
+    const msgIdsBefore = new Set<string>(this.cache.config.deletedWhatsAppMessageIds);
     if (ticketId && !this.cache.config.deletedTicketIds.includes(ticketId)) {
       this.cache.config.deletedTicketIds.push(ticketId);
     }
@@ -2195,6 +2340,8 @@ class ServerDatabaseEngine {
           if (data.version) this.dbVersion = data.version;
           this.isSseConnected = true;
           this.updateConnectionState();
+        } else if (res.status === 403) {
+          this.undoLocalDeletions(idsBefore, msgIdsBefore);
         }
       } catch (e) {
         this.enqueueOfflineMutation({
@@ -2213,6 +2360,8 @@ class ServerDatabaseEngine {
     if (!this.cache.config) this.cache.config = {} as any;
     if (!Array.isArray(this.cache.config.deletedTicketIds)) this.cache.config.deletedTicketIds = [];
     if (!Array.isArray(this.cache.config.deletedWhatsAppMessageIds)) this.cache.config.deletedWhatsAppMessageIds = [];
+    const idsBefore = new Set<string>(this.cache.config.deletedTicketIds);
+    const msgIdsBefore = new Set<string>(this.cache.config.deletedWhatsAppMessageIds);
 
     if (this.cache.data?.maintenanceTickets && typeof this.cache.data.maintenanceTickets === 'object') {
       const maint = this.cache.data.maintenanceTickets;
@@ -2267,9 +2416,22 @@ class ServerDatabaseEngine {
           if (data.version) this.dbVersion = data.version;
           this.isSseConnected = true;
           this.updateConnectionState();
+        } else if (res.status === 403) {
+          this.undoLocalDeletions(idsBefore, msgIdsBefore);
         }
       } catch (e) {}
     }
+  }
+
+  // The server refused a deletion: forget the ids marked deleted here, then take the server's tickets back.
+  private undoLocalDeletions(idsBefore: Set<string>, msgIdsBefore: Set<string>) {
+    const cfg = this.cache?.config;
+    if (cfg) {
+      if (Array.isArray(cfg.deletedTicketIds)) cfg.deletedTicketIds = cfg.deletedTicketIds.filter((id: string) => idsBefore.has(id));
+      if (Array.isArray(cfg.deletedWhatsAppMessageIds)) cfg.deletedWhatsAppMessageIds = cfg.deletedWhatsAppMessageIds.filter((id: string) => msgIdsBefore.has(id));
+    }
+    this.lastOwnWriteAt = 0;
+    this.fetchFullDatabase();
   }
 
   // 5. Force persist full state directly to SQLite database
@@ -2329,6 +2491,8 @@ class ServerDatabaseEngine {
   // 8. Reset specific day operations & sync cloud
   public async resetDay(dateStr: string): Promise<{ success: boolean }> {
     if (!dateStr) return { success: false };
+    // The server checks the role session first; nothing changes on this device if it refuses.
+    if (!(await this.postOk('/api/db/reset-day', { date: dateStr, senderId: this.clientId }))) return { success: false };
     if (!this.cache) this.cache = { data: {}, config: {} };
     if (!this.cache.data) this.cache.data = {};
 
@@ -2355,16 +2519,6 @@ class ServerDatabaseEngine {
       });
     } catch (e) {}
 
-    if (this.isServerApiAvailable) {
-      try {
-        await fetch('/api/db/reset-day', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date: dateStr, senderId: this.clientId })
-        });
-      } catch (e) {}
-    }
-
     await this.forceCloudSync();
     return { success: true };
   }
@@ -2372,6 +2526,9 @@ class ServerDatabaseEngine {
   // 9. Clean data older than specific date (e.g. 3-month cutoff)
   public async cleanDataOlderThan(cutoffDateStr: string): Promise<{ success: boolean; deletedDatesCount: number; deletedDates: string[] }> {
     if (!cutoffDateStr) return { success: false, deletedDatesCount: 0, deletedDates: [] };
+    if (!(await this.postOk('/api/db/clean-older-than', { cutoffDate: cutoffDateStr, senderId: this.clientId }))) {
+      return { success: false, deletedDatesCount: 0, deletedDates: [] };
+    }
     if (!this.cache) this.cache = { data: {}, config: {} };
     if (!this.cache.data) this.cache.data = {};
 
@@ -2412,22 +2569,13 @@ class ServerDatabaseEngine {
       });
     } catch (e) {}
 
-    if (this.isServerApiAvailable) {
-      try {
-        await fetch('/api/db/clean-older-than', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cutoffDate: cutoffDateStr, senderId: this.clientId })
-        });
-      } catch (e) {}
-    }
-
     await this.forceCloudSync();
     return { success: true, deletedDatesCount: deletedDates.length, deletedDates };
   }
 
   // 10. Reset 3-Month cycle, archive elapsed operational data, and advance to next interval
   public async resetQuarterlyCycle(newCycleStartDate: string): Promise<{ success: boolean; message?: string }> {
+    if (!(await this.postOk('/api/db/reset-cycle', { newCycleStartDate, senderId: this.clientId }))) return { success: false };
     if (!this.cache) this.cache = { data: {}, config: {} };
     if (!this.cache.data) this.cache.data = {};
     if (!this.cache.config) this.cache.config = {};
@@ -2473,18 +2621,17 @@ class ServerDatabaseEngine {
       });
     } catch (e) {}
 
-    if (this.isServerApiAvailable) {
-      try {
-        await fetch('/api/db/reset-cycle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ newCycleStartDate, senderId: this.clientId })
-        });
-      } catch (e) {}
-    }
-
     await this.forceCloudSync();
     return { success: true, message: `Cycle successfully reset. Next 3-Month Interval: ${newCycleStartDate} to ${newCycleEndDate}.` };
+  }
+
+  private async postOk(url: string, body: unknown): Promise<boolean> {
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
   }
 
   // 11. Get cycle operational statistics
@@ -2642,7 +2789,7 @@ export const database = {
   syncViewEverywhere: (
     activeDate?: string, 
     activeView?: string, 
-    extraParams?: { portalType?: string; statusTab?: string; viewScope?: string }
+    extraParams?: { portalType?: string; statusTab?: string; viewScope?: string; sharedBy?: string }
   ) => engine.syncViewEverywhere(activeDate, activeView, extraParams),
   forceCloudSync: () => engine.forceCloudSync(),
   getFullDatabase: () => engine.getFullDatabase(),

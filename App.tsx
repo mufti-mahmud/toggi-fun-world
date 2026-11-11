@@ -41,11 +41,15 @@ import {
   CustomTechnicalCategory,
   RidePreCheckRecord,
   AssignmentLockRecord,
-  ManagementWhatsAppReport
+  ManagementWhatsAppReport,
+  AuthStatus,
+  StaffCredentialStatus
 } from './types';
+import { resolveWorkingDate, parseWorkingDatePick, isDateKey } from './utils/workingDate';
 import { useAuth, Role } from './hooks/useAuth';
 import useFirebaseSync from './hooks/useFirebaseSync';
-import { isFirebaseConfigured, database } from './firebaseConfig';
+import { isFirebaseConfigured, database, serverNow, onServerClockChange } from './firebaseConfig';
+import { roleLogout, changeKpiCredentials } from './authClient';
 import { NotificationContext, useNotification, NotificationType } from './imageStore';
 import NotificationComponent from './components/AttendanceCheckin';
 
@@ -129,6 +133,9 @@ type View = 'counter' | 'reports' | 'assignments' | 'expertise' | 'roster' | 'ti
 type Modal = 'edit-image' | 'operators' | 'backup' | 'admin-manager' | 'share' | 'developer' | 'presentation' | null;
 type FirebaseObject<T extends { id: number | string }> = Record<string | number, Omit<T, 'id'>>;
 
+const WORKING_DATE_KEY = 'TFW_WORKING_DATE';
+const DATE_SYNC_SEEN_KEY = 'TFW_DATE_SYNC_SEEN';
+
 interface AppContentProps {
     onReturnToHub?: () => void;
 }
@@ -138,7 +145,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
     const { showNotification } = useNotification();
     
     // Always use local calendar date
-    const [today, setToday] = useState(() => getLocalDateString());
+    const [today, setToday] = useState(() => getLocalDateString(serverNow()));
     const [isCheckinAllowed, setIsCheckinAllowed] = useState(true);
 
     // App State
@@ -225,7 +232,8 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
     const { data: singleGnrRidesData, setData: setSingleGnrRidesData } = useFirebaseSync<SingleGnrRide[]>('config/singleGnrRides', DEFAULT_SINGLE_GNR_RIDES);
     const { data: floorsData, setData: setFloorsData } = useFirebaseSync<string[]>('config/floors', FLOORS);
     const { data: appConfigData, setData: setAppConfigData } = useFirebaseSync<AppConfig>('config/appConfig', DEFAULT_APP_CONFIG);
-    const { data: staffCredentialsData, setData: setStaffCredentialsData } = useFirebaseSync<Record<string, { password: string; recoveryPin: string; createdAt: string; updatedAt?: string }>>('data/staffCredentials', {});
+    const { data: staffCredentialsData } = useFirebaseSync<Record<string, StaffCredentialStatus>>('data/staffCredentials', {});
+    const { data: authStatusData } = useFirebaseSync<AuthStatus | null>('config/authStatus', null);
     const { data: ridePreChecksData, setData: setRidePreChecksData } = useFirebaseSync<Record<string, Record<string | number, RidePreCheckRecord>>>('data/ridePreChecks', {});
     const { data: assignmentLocksData, setData: setAssignmentLocksData } = useFirebaseSync<Record<string, Record<string | number, AssignmentLockRecord>>>('data/assignmentLocks', {});
     const { data: rawWhatsappReports } = useFirebaseSync<Record<string, ManagementWhatsAppReport>>('data/whatsappManagementReports', {});
@@ -304,25 +312,36 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         );
     }, [dailyCounts, ticketSalesData, dailyAssignments, packageSalesData, attendanceData, maintenanceTickets, dailyPackageCounts, dailyTicketCounts]);
 
-    // Persistent Active Date State
-    const [selectedDate, setSelectedDateState] = useState<string>(() => {
-        const todayStr = getLocalDateString();
-        const savedDate = window.localStorage.getItem('TFW_ACTIVE_DATE');
-        const savedDay = window.localStorage.getItem('TFW_ACTIVE_DATE_SAVED_DAY');
-        if (savedDate && /^\d{4}-\d{2}-\d{2}$/.test(savedDate) && savedDay === todayStr) {
-            return savedDate;
-        }
-        return todayStr;
-    });
+    // Each device keeps its own working date. New storage keys, because older bundles kept the park-wide date under TFW_ACTIVE_DATE.
+    // The pick lives in sessionStorage so a date picked in one tab never reaches another tab of the same browser.
+    const dateSync = appConfigData?.activeOperationalDateSync;
+    const dateSyncKey = dateSync ? `${dateSync.setOnDay}|${dateSync.setAt}|${dateSync.date}` : '';
+    // Read once per tab: a sibling tab marking a Sync as seen must not stop this tab from following it.
+    const seenSyncAtRef = useRef<string | null | undefined>(undefined);
+    if (seenSyncAtRef.current === undefined) {
+        seenSyncAtRef.current = window.sessionStorage.getItem(DATE_SYNC_SEEN_KEY) ?? window.localStorage.getItem(DATE_SYNC_SEEN_KEY);
+    }
+    const [selectedDate, setSelectedDateState] = useState<string>(() => resolveWorkingDate(
+        today,
+        parseWorkingDatePick(window.sessionStorage.getItem(WORKING_DATE_KEY)),
+        dateSync,
+        seenSyncAtRef.current
+    ).date);
 
-    // Automatically align with cloud active operational date and view when broadcasted across devices
     useEffect(() => {
-        if (appConfigData?.activeOperationalDate && /^\d{4}-\d{2}-\d{2}$/.test(appConfigData.activeOperationalDate)) {
-            setSelectedDateState(appConfigData.activeOperationalDate);
-            window.localStorage.setItem('TFW_ACTIVE_DATE', appConfigData.activeOperationalDate);
-            window.localStorage.setItem('TFW_ACTIVE_DATE_SAVED_DAY', getLocalDateString());
+        const storedPick = parseWorkingDatePick(window.sessionStorage.getItem(WORKING_DATE_KEY));
+        const decision = resolveWorkingDate(today, storedPick, dateSync, seenSyncAtRef.current);
+        if (decision.pick) window.sessionStorage.setItem(WORKING_DATE_KEY, JSON.stringify(decision.pick));
+        // A pick stamped with a later day stays: the day steps back when the server clock corrects a fast device clock.
+        else if (storedPick && storedPick.day < today) window.sessionStorage.removeItem(WORKING_DATE_KEY);
+        if (decision.seenSyncAt && decision.seenSyncAt !== seenSyncAtRef.current) {
+            seenSyncAtRef.current = decision.seenSyncAt;
+            window.sessionStorage.setItem(DATE_SYNC_SEEN_KEY, decision.seenSyncAt);
+            // Also browser-wide, so a tab reopened later the same day does not re-apply a Sync this browser already followed.
+            window.localStorage.setItem(DATE_SYNC_SEEN_KEY, decision.seenSyncAt);
         }
-    }, [appConfigData?.activeOperationalDate]);
+        setSelectedDateState(decision.date);
+    }, [today, dateSyncKey]);
 
     const prevBroadcastViewRef = useRef<string | undefined>(undefined);
     useEffect(() => {
@@ -348,6 +367,8 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
     // 2. Ticket transitioned to 'solved' -> chime & alert for Games & Ride Associate (operator)
     const prevMaintenanceTicketsRef = useRef<Map<string, string>>(new Map());
     const isMaintenanceTicketsInitialMountRef = useRef<boolean>(true);
+    // A ticket the server put back after a refused delete is not a new report, so it must not chime again.
+    const seenTicketIdsRef = useRef<Set<string>>(new Set());
     useEffect(() => {
         if (!maintenanceTickets || typeof maintenanceTickets !== 'object') return;
         const currentMap = new Map<string, { status: string; ticket: MaintenanceTicket }>();
@@ -366,6 +387,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
             const initStatusMap = new Map<string, string>();
             currentMap.forEach(({ status }, id) => initStatusMap.set(id, status));
             prevMaintenanceTicketsRef.current = initStatusMap;
+            currentMap.forEach((_, id) => seenTicketIdsRef.current.add(id));
             return;
         }
 
@@ -373,7 +395,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
             const prevStatus = prevMaintenanceTicketsRef.current.get(id);
 
             // Case A: A new issue has arrived in 'reported' status
-            if (!prevStatus && status === 'reported') {
+            if (!prevStatus && status === 'reported' && !seenTicketIdsRef.current.has(id)) {
                 // Play sound alert for maintenance, admin, or anyone monitoring issues
                 playReportedIssueSound({ 
                     rideName: ticket.rideName, 
@@ -408,17 +430,18 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         });
 
         const nextStatusMap = new Map<string, string>();
-        currentMap.forEach(({ status }, id) => nextStatusMap.set(id, status));
+        currentMap.forEach(({ status }, id) => {
+            nextStatusMap.set(id, status);
+            seenTicketIdsRef.current.add(id);
+        });
         prevMaintenanceTicketsRef.current = nextStatusMap;
     }, [maintenanceTickets, role, showNotification, playNotificationSound, playReportedIssueSound]);
 
-    const setSelectedDate = useCallback((newDate: string, syncGlobal: boolean = true) => {
+    // A pick moves only this device; sharing a date is the Sync action's job.
+    const setSelectedDate = useCallback((newDate: string) => {
+        if (!isDateKey(newDate)) return;
         setSelectedDateState(newDate);
-        window.localStorage.setItem('TFW_ACTIVE_DATE', newDate);
-        window.localStorage.setItem('TFW_ACTIVE_DATE_SAVED_DAY', getLocalDateString());
-        if (syncGlobal) {
-            database.ref('config/appConfig/activeOperationalDate').set(newDate);
-        }
+        window.sessionStorage.setItem(WORKING_DATE_KEY, JSON.stringify({ date: newDate, day: getLocalDateString(serverNow()) }));
     }, []);
 
     // Broadcast current view, active operational date, and data to all devices everywhere (mobile and desktop)
@@ -427,7 +450,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         setIsBroadcastingSync(true);
         try {
             // 1. Broadcast active date, current view, and state across mobile and desktop
-            await database.syncViewEverywhere(selectedDate, currentView);
+            await database.syncViewEverywhere(selectedDate, currentView, { sharedBy: currentUser?.name || role || '' });
 
             // 2. Pull latest full database snapshot immediately
             await database.engine.fetchFullDatabase();
@@ -438,7 +461,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         } finally {
             setTimeout(() => setIsBroadcastingSync(false), 800);
         }
-    }, [selectedDate, currentView, showNotification]);
+    }, [selectedDate, currentView, showNotification, currentUser, role]);
 
     // Check if there is data for selectedDate
     const hasDataForSelectedDate = useMemo(() => {
@@ -463,18 +486,6 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         const hasSales = sales && Object.values(sales).some(v => Number(v) > 0);
         return Boolean(hasCounts || hasSales);
     }, [dailyCounts, ticketSalesData, today]);
-
-    // Auto-select latest recorded date if today has no data on fresh launch without a prior manual pick
-    const hasAutoSelectedRef = useRef(false);
-    useEffect(() => {
-        if (!hasAutoSelectedRef.current && latestRecordedDate && !hasDataForToday) {
-            const savedDate = window.localStorage.getItem('TFW_ACTIVE_DATE');
-            if (!savedDate) {
-                setSelectedDateState(latestRecordedDate);
-                hasAutoSelectedRef.current = true;
-            }
-        }
-    }, [latestRecordedDate, hasDataForToday]);
 
     // Memoized arrays derived from server objects
     const rides = useMemo<Ride[]>(() => {
@@ -587,7 +598,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
     // Day tick interval (updates today without logging out or reloading)
     useEffect(() => {
         const checkTime = () => {
-            const now = new Date();
+            const now = new Date(serverNow());
             const newToday = getLocalDateString(now);
             if (newToday !== today) {
                 setToday(newToday);
@@ -595,10 +606,22 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
             const cutoff = appConfig.cutoffHour || 22;
             setIsCheckinAllowed(now.getHours() < cutoff);
         };
+        // A tablet waking from sleep must not save another entry under yesterday while it waits for the next tick.
+        const checkWhenVisible = () => { if (document.visibilityState === 'visible') checkTime(); };
 
         checkTime();
         const intervalId = setInterval(checkTime, 60000);
-        return () => clearInterval(intervalId);
+        document.addEventListener('visibilitychange', checkWhenVisible);
+        window.addEventListener('focus', checkTime);
+        window.addEventListener('pageshow', checkTime);
+        const stopServerClockWatch = onServerClockChange(checkTime);
+        return () => {
+            clearInterval(intervalId);
+            document.removeEventListener('visibilitychange', checkWhenVisible);
+            window.removeEventListener('focus', checkTime);
+            window.removeEventListener('pageshow', checkTime);
+            stopServerClockWatch();
+        };
     }, [today, appConfig.cutoffHour]);
 
     useEffect(() => {
@@ -644,8 +667,37 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         if (currentUser) {
             logAction('LOGOUT', `${currentUser.name} logged out.`);
         }
+        roleLogout().catch(() => {});
+        try {
+            for (const key of ['TFW_KPI_DASHBOARD_UNLOCKED', 'toggi_admin_add_unlocked_v1', 'toggi_admin_edit_unlocked_v1']) sessionStorage.removeItem(key);
+        } catch (_) {
+            // storage unavailable
+        }
         logout();
     }, [currentUser, logAction, logout]);
+
+    // The server refused a privileged action because this device has no recent sign-in for the role.
+    const handleLogoutRef = useRef(handleLogout);
+    handleLogoutRef.current = handleLogout;
+    useEffect(() => {
+        let lastShown = 0;
+        const onRoleSessionRequired = () => {
+            const now = Date.now();
+            if (now - lastShown < 10000) return;
+            lastShown = now;
+            setConfirmDialog({
+                isOpen: true,
+                title: 'Please sign in again',
+                message: 'For security, this action needs a recent sign-in on this device. Sign out, sign in again, then repeat the action.',
+                confirmLabel: 'Sign out',
+                cancelLabel: 'Not now',
+                confirmVariant: 'warning',
+                onConfirm: () => handleLogoutRef.current()
+            });
+        };
+        window.addEventListener('tfw:role-session-required', onRoleSessionRequired);
+        return () => window.removeEventListener('tfw:role-session-required', onRoleSessionRequired);
+    }, []);
 
     const attendanceArray = useMemo<AttendanceRecord[]>(() => {
         const arr: AttendanceRecord[] = [];
@@ -979,7 +1031,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
     const handleClockIn = useCallback((attendedBriefing: boolean, briefingTime: string | null) => {
         if (!currentUser || !isFirebaseConfigured) return;
 
-        const clockInDate = getLocalDateString();
+        const clockInDate = getLocalDateString(serverNow());
         const userAtClockIn = currentUser; 
     
         database.ref(`data/attendance/${clockInDate}/${userAtClockIn.id}`).set({ attendedBriefing, briefingTime })
@@ -1267,7 +1319,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         if (!ride) return Promise.resolve();
 
         const now = new Date();
-        const ticketDate = dateOverride || getLocalDateString(now);
+        const ticketDate = dateOverride || getLocalDateString(serverNow());
         const ticketId = `${ticketDate}-${rideId}-${Date.now()}`;
         const isCX = role === 'cx' || source === 'cx';
 
@@ -1678,19 +1730,23 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
             confirmLabel: 'Clear All Records (Start Newly)',
             confirmVariant: 'danger',
             onConfirm: async () => {
+                let ok = false;
                 try {
-                    await fetch('/api/maintenance/clear-all', { method: 'POST' });
+                    const r = await fetch('/api/maintenance/clear-all', { method: 'POST' });
+                    ok = r.ok;
                 } catch (_) {}
-                setMaintenanceTickets({});
+                if (!ok) {
+                    showNotification('Could not clear the records.', 'error');
+                    return;
+                }
                 try {
-                    database.ref('data/maintenanceTickets').set({});
                     localStorage.removeItem('tfw_cache_data/maintenanceTickets');
                 } catch (_) {}
                 logAction('MAINTENANCE_UPDATE', 'Cleared all maintenance records to start newly from today');
                 showNotification('All maintenance issue records cleared. Starting fresh from today!', 'success');
             }
         });
-    }, [logAction, showNotification, setMaintenanceTickets]);
+    }, [logAction, showNotification]);
 
     const handleUploadSolvedTickets = useCallback((uploadedTickets: MaintenanceTicket[]) => {
         if (!uploadedTickets || uploadedTickets.length === 0) return;
@@ -1747,21 +1803,22 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         showNotification(`Category synced to "${newCategoryName}"`, 'info', 2500);
     }, [isFirebaseConfigured, selectedDate, setMaintenanceTickets, logAction, showNotification]);
 
-    const handleSaveKpiCredentials = useCallback((newUser: string, newPass: string) => {
+    const handleSaveKpiCredentials = useCallback(async (newUser: string, newPass: string): Promise<boolean> => {
         const cleanUser = newUser.trim() || 'kpi';
-        const cleanPass = newPass.trim() || 'kpi79';
-        setAppConfigData(prev => ({
-            ...(prev || DEFAULT_APP_CONFIG),
-            maintenanceKpiUser: cleanUser,
-            maintenanceKpiPassword: cleanPass
-        }));
-        if (isFirebaseConfigured) {
-            database.ref('config/appConfig/maintenanceKpiUser').set(cleanUser);
-            database.ref('config/appConfig/maintenanceKpiPassword').set(cleanPass);
+        const r = await changeKpiCredentials(cleanUser, newPass.trim() || undefined);
+        if (!r.ok) {
+            showNotification(
+                r.status === 0 ? 'Cannot reach the server. Try again when you are online.'
+                    : r.error === 'role_session_required' ? 'KPI credentials were not changed: sign in again.'
+                    : 'Could not save the KPI credentials.',
+                'error'
+            );
+            return false;
         }
         logAction('UPDATE_KPI_CREDENTIALS', `Updated Maintenance KPI Dashboard User ID (${cleanUser}) & Password.`);
         showNotification(`Maintenance KPI User (${cleanUser}) & Password saved!`, 'success');
-    }, [isFirebaseConfigured, setAppConfigData, logAction, showNotification]);
+        return true;
+    }, [logAction, showNotification]);
 
     // --- Admin Entity Modification Handlers ---
     const handleSaveRide = useCallback((ride: Ride) => {
@@ -2132,21 +2189,6 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         }
     }, [ridesData, countersData, operatorsData, ticketSalesPersonnelData, maintenancePersonnelData, packages, setRidesData, setCountersData, setOperatorsData, setTicketSalesPersonnelData, setMaintenancePersonnelData, setPackagesData, setAppConfigData, logAction, showNotification]);
 
-    const handleSaveStaffCredential = useCallback(async (key: string, creds: { password: string; recoveryPin: string; createdAt: string; updatedAt?: string }) => {
-        const updated = {
-            ...(staffCredentialsData || {}),
-            [key]: creds
-        };
-        await setStaffCredentialsData(updated);
-        try {
-            const local = JSON.parse(localStorage.getItem('TFW_STAFF_CREDENTIALS') || '{}');
-            local[key] = creds;
-            localStorage.setItem('TFW_STAFF_CREDENTIALS', JSON.stringify(local));
-        } catch {
-            // ignore
-        }
-    }, [staffCredentialsData, setStaffCredentialsData]);
-
     if (!role) {
         return (
             <div className="flex flex-col min-h-screen bg-gray-900 text-gray-100">
@@ -2175,10 +2217,9 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
                         cxPersonnel={cxPersonnel}
                         appLogo={appLogo}
                         appConfig={appConfig}
-                        adminPassword={appConfig.adminPassword || 'admin79'}
                         connectionStatus={connectionStatus}
                         staffCredentials={staffCredentialsData}
-                        onSaveStaffCredentials={handleSaveStaffCredential}
+                        authStatus={authStatusData}
                     />
                 </div>
             </div>
@@ -2417,7 +2458,6 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
                         onSaveCategories={handleSaveCustomTechnicalCategories}
                         onUpdateTicketCategory={handleUpdateTicketCategory}
                         kpiUsername={appConfig.maintenanceKpiUser || 'kpi'}
-                        kpiPassword={appConfig.maintenanceKpiPassword || 'kpi79'}
                         onSaveKpiCredentials={handleSaveKpiCredentials}
                         isAlreadyAuthenticated={role === 'maintenance-kpi' || role === 'admin'}
                     />
@@ -2731,6 +2771,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
                     onSaveSingleGnrRides={handleSaveSingleGnrRides}
                     floors={floors}
                     appConfig={appConfig}
+                    authStatus={authStatusData}
                     onClose={() => setModal(null)}
                     onSaveRide={handleSaveRide}
                     onDeleteRide={handleDeleteRide}

@@ -17,7 +17,7 @@ import {
   getDhakaDateString,
   formatDhakaTime
 } from './constants';
-import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite, adoptLoadedSqliteState, resetSqliteRowCache, jsonOnlyDatesAlreadyMerged, jsonSectionsAlreadyMerged, isTableBackedDataKey } from './sqliteDb';
+import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite, adoptLoadedSqliteState, resetSqliteRowCache, jsonOnlyDatesAlreadyMerged, jsonSectionsAlreadyMerged, isTableBackedDataKey, vacuumSqlite, getAppMeta, setAppMeta } from './sqliteDb';
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
 import { isManagementSalesMessage, parseManagementReportText } from './utils/whatsappManagementParser';
 import { createSiteAuth, readApiKey, safeEqual, clientIp, createAttemptLimiter } from './siteAuth';
@@ -25,8 +25,15 @@ import { format as formatLogArgs } from 'node:util';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
+import { isDateKey } from './utils/workingDate';
 import { externalizeImages, countInlineImages, resolveLocalImage, referencedImageFiles } from './imageFiles';
-import { initActivityLog, logActivity, flushActivityLog, readActivityDay, iterateActivityDay, summarizeActivityDay, listActivityDays, activityCsvRow, ACTIVITY_CSV_HEADER, ACTIVITY_PAGE_SIZE, suppressedActivityRows, dhakaDay } from './activityLog';
+import { FORBIDDEN_SEGMENTS, pathSegments, stripConfig, stripData } from './authShared';
+import {
+  migrateAuthSecrets, toPublicDb, sanitizeMutationForClients, applyGenericWrite, createRoleSessions, requireRole,
+  registerRoleAuthRoutes, scrubRestorePoints, scrubSqliteSideCopies, extractLegacySecrets, prepareLegacySecrets,
+  loadRoleSessionKey, keepStoredShapes, restoreProtectedAppConfig, TICKET_ROLES, ADMIN_ROLES, REPORT_ROLES
+} from './roleAuth';
+import { initActivityLog, logActivity, flushActivityLog, redactStoredSecretsOnce, readActivityDay, iterateActivityDay, summarizeActivityDay, listActivityDays, activityCsvRow, ACTIVITY_CSV_HEADER, ACTIVITY_PAGE_SIZE, suppressedActivityRows, dhakaDay } from './activityLog';
 
 // Ensure production mode if running from compiled server.cjs bundle
 if (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) {
@@ -312,54 +319,8 @@ function normalizeAppConfigAndRoles(targetDb: any): boolean {
     changed = true;
   }
 
-  // Password synchronization: add 79 to all passwords except maintenance
-  if (appConfig.adminPassword === 'admin' || !appConfig.adminPassword) {
-    appConfig.adminPassword = 'admin79';
-    changed = true;
-  }
-  if (appConfig.operationOfficerPassword === 'ops' || !appConfig.operationOfficerPassword) {
-    appConfig.operationOfficerPassword = 'ops79';
-    changed = true;
-  }
-  if (appConfig.salesOfficerPassword) {
-    delete appConfig.salesOfficerPassword;
-    changed = true;
-  }
-  if (appConfig.cxPassword === 'cx' || !appConfig.cxPassword) {
-    appConfig.cxPassword = 'cx79';
-    changed = true;
-  }
-  if (!appConfig.maintenancePassword) {
-    appConfig.maintenancePassword = 'maint';
-    changed = true;
-  }
   if (!appConfig.informationDeskUser) {
     appConfig.informationDeskUser = 'info';
-    changed = true;
-  }
-  if (!appConfig.informationDeskPassword) {
-    appConfig.informationDeskPassword = 'info79';
-    changed = true;
-  }
-
-  if (targetDb.config.adminPassword !== appConfig.adminPassword) {
-    targetDb.config.adminPassword = appConfig.adminPassword;
-    changed = true;
-  }
-  if (targetDb.config.operationOfficerPassword !== appConfig.operationOfficerPassword) {
-    targetDb.config.operationOfficerPassword = appConfig.operationOfficerPassword;
-    changed = true;
-  }
-  if (targetDb.config.salesOfficerPassword !== appConfig.salesOfficerPassword) {
-    targetDb.config.salesOfficerPassword = appConfig.salesOfficerPassword;
-    changed = true;
-  }
-  if (targetDb.config.cxPassword !== appConfig.cxPassword) {
-    targetDb.config.cxPassword = appConfig.cxPassword;
-    changed = true;
-  }
-  if (targetDb.config.maintenancePassword !== appConfig.maintenancePassword) {
-    targetDb.config.maintenancePassword = appConfig.maintenancePassword;
     changed = true;
   }
 
@@ -385,11 +346,6 @@ function getInitialDatabase() {
       appConfig: DEFAULT_APP_CONFIG,
       appName: 'Tanvir Bashundhara Group',
       appLogo: null,
-      adminPassword: 'admin79',
-      operationOfficerPassword: 'ops79',
-      salesOfficerPassword: 'sales79',
-      maintenancePassword: 'maint',
-      cxPassword: 'cx79',
       cutoffHour: 22,
       currency: 'BDT',
       floors: FLOORS,
@@ -535,6 +491,9 @@ function copySectionsFromJson(state: any, jsonDb: any) {
   }
   if (sections.length || historyAdded) console.log(`Copied from database.json into SQLite: ${sections.join(', ') || 'no other sections'}; ${historyAdded} History record(s).`);
 }
+
+// Collections a broadcast-sync may only merge into with a map; any other value would wipe them.
+const BROADCAST_MAP_SECTIONS = new Set(['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales', 'whatsappManagementReports', 'historyLog', 'maintenanceTickets']);
 
 // A device's cache can be behind the server, and saves now delete removed keys, so its sync must not drop keys it has not seen.
 function mergeKeyedCollection(current: any, incoming: any): any {
@@ -900,7 +859,7 @@ let jsonCopyWrites = 0;
 let jsonCopyTimer: NodeJS.Timeout | null = null;
 let jsonCopyCountDates: string[] = [];
 
-function writeJsonCopy() {
+function writeJsonCopy(rotateBackup: boolean = false) {
   if (!memoryDb) return;
   // Compact JSON: same content, less CPU on the 0.2-core server and a smaller file.
   const serialized = JSON.stringify(memoryDb);
@@ -909,7 +868,7 @@ function writeJsonCopy() {
   fs.renameSync(tempFile, DB_FILE);
 
   // Rotating backup every 10 copies, through a temp file so an interrupted write cannot leave it cut short.
-  if (jsonCopyWrites % 10 === 0) {
+  if (rotateBackup || jsonCopyWrites % 10 === 0) {
     const backupTemp = `${DB_FILE}.backup.tmp`;
     fs.writeFileSync(backupTemp, serialized, 'utf-8');
     fs.renameSync(backupTemp, `${DB_FILE}.backup`);
@@ -1069,10 +1028,12 @@ function saveDatabaseToDisk(mutation?: ServerMutationEvent, immediate: boolean =
   concurrencyMetrics.operationsTotal++;
   opsCounter++;
   concurrencyMetrics.lastOperationTime = Date.now();
-  try { logDataChange(mutation); } catch (_) {}
+  const raw = mutation || { type: 'sync' };
+  const safe = sanitizeMutationForClients(raw, memoryDb);
+  try { logDataChange(safe || { type: raw.type, senderId: raw.senderId }); } catch (_) {}
 
   // 1. Instant Real-Time SSE broadcast to all connected clients (0ms latency!)
-  broadcastMutation(mutation || { type: 'sync' });
+  sendToClients(safe || { type: 'sync' });
 
   // 2. Coalesced write-behind to disk & SQLite
   scheduleDiskFlush(immediate);
@@ -1097,7 +1058,7 @@ function moveInlineImagesToFiles() {
     const safety = path.join(DATA_DIR, 'restore-points', 'before-image-files.json');
     if (!fs.existsSync(safety)) {
       fs.mkdirSync(path.dirname(safety), { recursive: true });
-      fs.writeFileSync(`${safety}.tmp`, JSON.stringify(memoryDb), 'utf-8');
+      fs.writeFileSync(`${safety}.tmp`, JSON.stringify(backupView(memoryDb)), 'utf-8');
       fs.renameSync(`${safety}.tmp`, safety);
     }
   } catch (e) {
@@ -1111,7 +1072,53 @@ function moveInlineImagesToFiles() {
   }
 }
 
+// Earlier builds kept role passwords and staff credentials in plain text; once they are hashed, every copy on disk is
+// rewritten. Each step runs on its own so one unreadable file does not leave the others behind.
+function scrubPlainSecretCopies() {
+  const step = (name: string, fn: () => void) => {
+    try { fn(); } catch (e: any) { console.error(`Removing plain passwords (${name}) failed: ${e?.message || e}`); }
+  };
+  step('tfw.db', () => {
+    memoryDb.version = (memoryDb.version || 0) + 1;
+    memoryDb.lastUpdated = new Date().toISOString();
+    dbResponseCache = null;
+    saveToSqlite(memoryDb);
+  });
+  step('database.json', () => {
+    writeJsonCopy(true);
+    for (const f of fs.readdirSync(DATA_DIR)) {
+      if (f.startsWith('database.json.tmp')) fs.unlinkSync(path.join(DATA_DIR, f));
+    }
+  });
+  step('tfw.db free pages', () => vacuumSqlite());
+  step('restore points', () => {
+    const r = scrubRestorePoints(path.join(DATA_DIR, 'restore-points'));
+    if (r.scrubbed.length) console.log(`🔐 Removed passwords from restore points: ${r.scrubbed.join(', ')}`);
+  });
+  step('tfw.db copies', () => {
+    const r = scrubSqliteSideCopies(DATA_DIR);
+    if (r.scrubbed.length || r.walsRemoved.length) console.log(`🔐 Removed passwords from tfw.db copies: ${[...r.scrubbed, ...r.walsRemoved].join(', ')}`);
+  });
+  step('activity log', () => {
+    const n = redactStoredSecretsOnce();
+    if (n) console.log(`🔐 Redacted recovery PINs and passwords in ${n} activity log row(s).`);
+  });
+  step('marker', () => setAppMeta('secrets_scrubbed_v1', new Date().toISOString()));
+}
+
+// Database copy for files that leave the live store (downloads, restore points): no secrets, no computed authStatus.
+function backupView(db: any) {
+  const view = toPublicDb(db);
+  delete view.config.authStatus;
+  return view;
+}
+
 function broadcastMutation(mutation: ServerMutationEvent) {
+  sendToClients(sanitizeMutationForClients(mutation, memoryDb) || { type: 'sync' });
+}
+
+// Callers pass a mutation already through sanitizeMutationForClients.
+function sendToClients(mutation: ServerMutationEvent) {
   const payload = JSON.stringify({
     ...mutation,
     version: memoryDb.version,
@@ -1237,6 +1244,7 @@ function normalizeIssueText(str: string): string {
 function getValueByPath(obj: any, pathStr: string) {
   if (!pathStr) return obj;
   const parts = pathStr.split('/').filter(Boolean);
+  if (parts.some(p => FORBIDDEN_SEGMENTS.has(p))) return undefined;
   let current = obj;
   for (const part of parts) {
     if (current === undefined || current === null) return undefined;
@@ -1258,9 +1266,34 @@ let notifyTicketResolvedToWhatsApp: (ticketData: {
   solvedAt?: string;
 }) => Promise<{ success: boolean; messageId?: string; error?: string }> = async () => ({ success: false, error: 'Not initialized' });
 
+// Only broadcast-sync sets the shared date, stamped with the server's clock; any other write that reaches it (a device's stale appConfig copy, a replayed offline queue) keeps the stored record.
+const DATE_SYNC_PATH = 'config/appConfig/activeOperationalDateSync';
+const touchesDateSync = (p: string) => {
+  const path = String(p || '').split('/').filter(Boolean).join('/');
+  return path !== '' && (path === DATE_SYNC_PATH || DATE_SYNC_PATH.startsWith(`${path}/`) || path.startsWith(`${DATE_SYNC_PATH}/`));
+};
+const snapshotDateSync = (db: any) => {
+  const rec = db?.config?.appConfig?.activeOperationalDateSync;
+  return rec && typeof rec === 'object' ? { ...rec } : undefined;
+};
+const isPlainObject = (v: any) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+// Screens and Sync write appConfig.<key> directly, which fails (500) or scatters keys when an old write left it a number or list.
+function ensureAppConfig(db: any): any {
+  if (!isPlainObject(db.config)) db.config = {};
+  if (!isPlainObject(db.config.appConfig)) db.config.appConfig = {};
+  return db.config.appConfig;
+}
+function restoreDateSync(db: any, previous: any) {
+  if (!db || typeof db !== 'object') return;
+  const appConfig = ensureAppConfig(db);
+  if (previous) appConfig.activeOperationalDateSync = previous;
+  else delete appConfig.activeOperationalDateSync;
+}
+
 function setValueByPath(obj: any, pathStr: string, value: any, isExplicitReopen: boolean = false) {
   const parts = pathStr.split('/').filter(Boolean);
   if (parts.length === 0) return value;
+  if (parts.some(p => FORBIDDEN_SEGMENTS.has(p))) return obj;
   let current = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
@@ -1409,7 +1442,8 @@ function setValueByPath(obj: any, pathStr: string, value: any, isExplicitReopen:
 async function startServer() {
   initActivityLog(DATA_DIR, [
     GREEN_API_ENV_TOKEN_INSTANCE, WHAPI_ENV_TOKEN, TICKET_API_MASTER_KEY, WHATSAPP_WEBHOOK_SECRET,
-    String(process.env.SITE_PASSWORD || ''), String(process.env.BACKUP_PASSWORD || ''), String(process.env.SESSION_SECRET || '')
+    String(process.env.SITE_PASSWORD || ''), String(process.env.BACKUP_PASSWORD || ''), String(process.env.SESSION_SECRET || ''),
+    String(process.env.INITIAL_ADMIN_PASSWORD || '')
   ]);
   // Every server error and warning also lands in the activity log, so a day's problems can be read back later.
   for (const method of ['error', 'warn'] as const) {
@@ -1542,8 +1576,26 @@ async function startServer() {
 
   // 1. Load initial memory & local cache from SQLite
   loadDatabase();
+  const migrationStarted = Date.now();
+  const migration = await migrateAuthSecrets(memoryDb, {
+    initialAdminPassword: String(process.env.INITIAL_ADMIN_PASSWORD || ''),
+    persist: () => saveToSqlite(memoryDb)
+  });
+  if (migration.changed || !getAppMeta('secrets_scrubbed_v1')) scrubPlainSecretCopies();
+  const migrationMs = Date.now() - migrationStarted;
+  logActivity('system', 'auth secrets migrated', { detail: { rolesHashed: migration.rolesHashed, staffHashed: migration.staffHashed, plainFieldsRemoved: migration.plainFieldsRemoved, ms: migrationMs } });
+  console.log(`🔐 Auth secrets: ${migration.rolesHashed} role password(s) and ${migration.staffHashed} staff credential(s) converted to hashes, ${migration.plainFieldsRemoved} plain field(s) removed (${migrationMs} ms).`);
   removeSecretsFromDatabase();
   moveInlineImagesToFiles();
+
+  const roleSessionKey = loadRoleSessionKey({ sessionSecret: String(process.env.SESSION_SECRET || ''), getMeta: key => getAppMeta(key), setMeta: (key, value) => setAppMeta(key, value) });
+  const roleSessions = createRoleSessions(roleSessionKey, () => memoryDb);
+  registerRoleAuthRoutes(app, { getDb: loadDatabase, save: saveDatabaseToDisk, logActivity, sessions: roleSessions });
+  const callerHasRole = (req: express.Request) => {
+    const scopes = roleSessions.read(req);
+    return (roles: string[]) => scopes.some(sc => sc.s === 'admin' || roles.includes(sc.s));
+  };
+  const needRole = (roles: string[]) => requireRole(roleSessions, roles);
   logActivity('system', 'server started', {
     detail: { node: process.version, dbVersion: memoryDb?.version, whatsappPollMinutes: process.env.WHATSAPP_POLL_DISABLED === '1' ? 'off' : WHATSAPP_POLL_INTERVAL_MINUTES, webhookSecretSet: Boolean(WHATSAPP_WEBHOOK_SECRET) }
   });
@@ -1632,22 +1684,28 @@ async function startServer() {
   // Broadcast current view and state to all devices
   app.post('/api/db/broadcast-sync', async (req, res) => {
     try {
-      const { db, activeDate, activeView, maintenancePortal, maintenanceStatusTab, maintenanceViewScope, senderId } = req.body;
+      const { db, activeDate, shareDate, sharedBy, activeView, maintenancePortal, maintenanceStatusTab, maintenanceViewScope, senderId } = req.body;
+      const previousDateSync = snapshotDateSync(memoryDb);
       if (db && typeof db === 'object') {
+        const keepSecrets = memoryDb?.config?.authSecrets;
+        const keepCreds = memoryDb?.data?.staffCredentials;
         const currentConfig = memoryDb?.config || {};
-        const incomingConfig = db.config || {};
+        const hasRole = callerHasRole(req);
+        const incomingConfig = keepStoredShapes(currentConfig, stripConfig(db.config || {}) || {});
         const mergedConfig = { ...currentConfig, ...incomingConfig };
         for (const k of ['rides', 'operators', 'ticketSalesPersonnel', 'maintenancePersonnel', 'cxPersonnel', 'counters', 'packages']) {
           if (k in incomingConfig) mergedConfig[k] = mergeKeyedCollection(currentConfig[k], incomingConfig[k]);
         }
+        restoreProtectedAppConfig(currentConfig.appConfig, mergedConfig.appConfig, hasRole);
         memoryDb = {
           version: (memoryDb?.version || 1) + 1,
           lastUpdated: new Date().toISOString(),
           config: mergedConfig,
           data: (() => {
             const currentData = memoryDb?.data || {};
-            const incomingData = { ...(db.data || {}) };
-            historyLogAsObject(incomingData);
+            const strippedData = { ...(stripData(db.data || {}) || {}) };
+            historyLogAsObject(strippedData);
+            const incomingData = keepStoredShapes(currentData, strippedData, BROADCAST_MAP_SECTIONS);
             const mergedData = { ...currentData, ...incomingData };
             for (const k of ['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales', 'whatsappManagementReports', 'historyLog']) {
               if (k in incomingData) mergedData[k] = mergeKeyedCollection(currentData[k], incomingData[k]);
@@ -1689,9 +1747,21 @@ async function startServer() {
             return mergedData;
           })()
         };
+        if (keepSecrets) memoryDb.config.authSecrets = keepSecrets;
+        if (keepCreds) memoryDb.data.staffCredentials = keepCreds;
       }
-      if (!memoryDb.config.appConfig) memoryDb.config.appConfig = {};
+      ensureAppConfig(memoryDb);
+      restoreDateSync(memoryDb, previousDateSync);
+      // Older bundles still read and write this field, so it keeps following every Sync.
       if (activeDate) memoryDb.config.appConfig.activeOperationalDate = activeDate;
+      if (shareDate && isDateKey(activeDate)) {
+        memoryDb.config.appConfig.activeOperationalDateSync = {
+          date: activeDate,
+          setOnDay: getDhakaDateString(),
+          setAt: new Date().toISOString(),
+          by: String(sharedBy || '').slice(0, 80)
+        };
+      }
       if (activeView) memoryDb.config.appConfig.activeView = activeView;
       if (maintenancePortal) memoryDb.config.appConfig.activeMaintenancePortal = maintenancePortal;
       if (maintenanceStatusTab) memoryDb.config.appConfig.activeMaintenanceStatusTab = maintenanceStatusTab;
@@ -1756,7 +1826,7 @@ async function startServer() {
 
       res.json({
         success: true,
-        db,
+        db: toPublicDb(db),
         version: db.version,
         refreshedAt: new Date().toISOString(),
         message: 'Software and date-wise data refreshed successfully.'
@@ -1784,12 +1854,13 @@ async function startServer() {
     const pathQuery = req.query.path as string;
     const db = loadDatabase();
     if (pathQuery) {
-      const val = getValueByPath(db, pathQuery);
+      if (pathSegments(String(pathQuery)).some(s => FORBIDDEN_SEGMENTS.has(s))) return res.status(400).json({ error: 'invalid_path' });
+      const val = getValueByPath(toPublicDb(db), String(pathQuery));
       return res.json({ success: true, data: val, version: db.version });
     }
     let entry = dbResponseCache;
     if (!entry || entry.db !== db || entry.version !== db.version || entry.lastUpdated !== db.lastUpdated || Date.now() - entry.builtAt > DB_RESPONSE_MAX_AGE_MS) {
-      const body = Buffer.from(JSON.stringify({ success: true, db, version: db.version }));
+      const body = Buffer.from(JSON.stringify({ success: true, db: toPublicDb(db), version: db.version }));
       const etagFn = app.get('etag fn');
       const built: DbResponse = { db, version: db.version, lastUpdated: db.lastUpdated, builtAt: Date.now(), body, etag: etagFn ? etagFn(body) : undefined, encoded: new Map() };
       dbResponseCache = entry = built;
@@ -1831,16 +1902,24 @@ async function startServer() {
 
   // Set single path
   app.post('/api/db/set', (req, res) => {
-    const { path: pathStr, value, senderId } = req.body;
-    if (pathStr === undefined) {
+    const { path: rawPath, value: rawValue, senderId } = req.body;
+    if (rawPath === undefined) {
       return res.status(400).json({ error: 'path is required' });
     }
+    const pathStr = String(rawPath);
     const db = loadDatabase();
-    setValueByPath(db, pathStr, value);
+    const previousDateSync = snapshotDateSync(db);
+    const result = applyGenericWrite(db, pathStr, rawValue, { hasRole: callerHasRole(req), setter: (d, p, v) => setValueByPath(d, p, v) });
+    if ('invalid' in result) return res.status(400).json({ error: 'invalid_path' });
+    if ('ignored' in result) return res.json({ success: true, ignored: true, version: db.version });
+    if ('forbidden' in result) return res.status(403).json({ error: 'role_session_required', roles: result.forbidden });
+    const value = result.value;
+    const guardDateSync = touchesDateSync(pathStr);
+    if (guardDateSync) restoreDateSync(db, previousDateSync);
     if (pathStr.startsWith('data/historyLog')) {
       trimHistoryLogs(db);
     }
-    saveDatabaseToDisk({ type: 'set', path: pathStr, value, senderId });
+    saveDatabaseToDisk({ type: 'set', path: pathStr, value: guardDateSync ? (getValueByPath(db, pathStr) ?? null) : value, senderId });
 
     // Instantly broadcast dedicated issue-reported event if an issue was reported
     if (pathStr.startsWith('data/maintenanceTickets') && value && typeof value === 'object' && value.status === 'reported') {
@@ -1952,14 +2031,25 @@ async function startServer() {
 
   // Atomic Increment/Decrement (High concurrency protection)
   app.post('/api/db/increment', (req, res) => {
-    const { path: pathStr, delta = 1, min = 0, senderId } = req.body;
-    if (!pathStr) {
+    const { path: rawPath, delta = 1, min = 0, senderId } = req.body;
+    if (!rawPath) {
       return res.status(400).json({ error: 'path is required' });
     }
+    const pathStr = String(rawPath);
     const db = loadDatabase();
     const currentVal = Number(getValueByPath(db, pathStr)) || 0;
     const newVal = Math.max(min, currentVal + Number(delta));
-    setValueByPath(db, pathStr, newVal);
+    const previousDateSync = snapshotDateSync(db);
+    const result = applyGenericWrite(db, pathStr, newVal, { hasRole: callerHasRole(req), setter: (d, p, v) => setValueByPath(d, p, v) });
+    if ('invalid' in result) return res.status(400).json({ error: 'invalid_path' });
+    if ('ignored' in result) return res.json({ success: true, ignored: true, version: db.version });
+    if ('forbidden' in result) return res.status(403).json({ error: 'role_session_required', roles: result.forbidden });
+    if (touchesDateSync(pathStr)) {
+      restoreDateSync(db, previousDateSync);
+      const kept = getValueByPath(db, pathStr) ?? null;
+      saveDatabaseToDisk({ type: 'set', path: pathStr, value: kept, senderId });
+      return res.json({ success: true, version: db.version, value: kept });
+    }
     saveDatabaseToDisk({ type: 'increment', path: pathStr, delta, value: newVal, senderId });
     res.json({ success: true, version: db.version, value: newVal });
   });
@@ -1971,6 +2061,7 @@ async function startServer() {
     if (!date || rideId === undefined || !category) {
       return res.status(400).json({ error: 'date, rideId, and category are required' });
     }
+    if (FORBIDDEN_SEGMENTS.has(String(date)) || FORBIDDEN_SEGMENTS.has(String(rideId))) return res.status(400).json({ error: 'invalid_path' });
     const db = loadDatabase();
     const d = String(date);
     const rId = String(rideId);
@@ -2050,6 +2141,7 @@ async function startServer() {
     if (!date || rideId === undefined || !category) {
       return res.status(400).json({ error: 'date, rideId, and category are required' });
     }
+    if (FORBIDDEN_SEGMENTS.has(String(date)) || FORBIDDEN_SEGMENTS.has(String(rideId))) return res.status(400).json({ error: 'invalid_path' });
     const db = loadDatabase();
     const d = String(date);
     const rId = String(rideId);
@@ -2139,14 +2231,25 @@ async function startServer() {
       return res.json({ success: true, processed: 0, version: memoryDb?.version || 1 });
     }
     const db = loadDatabase();
+    const previousDateSync = snapshotDateSync(db);
     let processed = 0;
     const appliedUpdates: Record<string, any> = {};
+    // Skipped operations still count as processed: the client drops its whole queue on any non-OK answer.
+    const skipped: Array<{ index: number; reason: string }> = [];
+    const hasRole = callerHasRole(req);
+    const setter = (d: any, p: string, v: any) => setValueByPath(d, p, v);
+    const skipReason = (r: ReturnType<typeof applyGenericWrite>) =>
+      'invalid' in r ? 'invalid_path' : 'ignored' in r ? 'protected' : 'forbidden' in r ? 'role_session_required' : '';
 
-    for (const op of queue) {
+    for (const [index, op] of queue.entries()) {
       if (!op || typeof op !== 'object') continue;
-      const { type, path: pathStr, value, delta, min = 0, updates, basePath = '', date, rideId, category } = op;
+      const { type, path: rawPath, value, delta, min = 0, updates, basePath = '', date, rideId, category } = op;
+      const pathStr = rawPath === undefined || rawPath === null ? rawPath : String(rawPath);
 
-      if (type === 'increment-ride-count' && date && rideId !== undefined && category) {
+      if ((type === 'increment-ride-count' || type === 'set-ride-count') && (FORBIDDEN_SEGMENTS.has(String(date)) || FORBIDDEN_SEGMENTS.has(String(rideId)))) {
+        skipped.push({ index, reason: 'invalid_path' });
+        processed++;
+      } else if (type === 'increment-ride-count' && date && rideId !== undefined && category) {
         const d = String(date);
         const rId = String(rideId);
         const numDelta = Number(delta || 1);
@@ -2224,14 +2327,16 @@ async function startServer() {
         appliedUpdates[`data/dailyCounts/${d}/${rideId}`] = newTotal;
         processed++;
       } else if (type === 'set' && pathStr !== undefined) {
-        setValueByPath(db, pathStr, value);
-        appliedUpdates[pathStr] = value;
+        const r = applyGenericWrite(db, pathStr, value, { hasRole, setter });
+        if ('applied' in r) appliedUpdates[pathStr] = r.value;
+        else skipped.push({ index, reason: skipReason(r) });
         processed++;
       } else if (type === 'increment' && pathStr) {
         const currentVal = Number(getValueByPath(db, pathStr)) || 0;
         const newVal = Math.max(min, currentVal + Number(delta || 1));
-        setValueByPath(db, pathStr, newVal);
-        appliedUpdates[pathStr] = newVal;
+        const r = applyGenericWrite(db, pathStr, newVal, { hasRole, setter });
+        if ('applied' in r) appliedUpdates[pathStr] = newVal;
+        else skipped.push({ index, reason: skipReason(r) });
         processed++;
       } else if (type === 'update' && updates && typeof updates === 'object') {
         for (const [p, v] of Object.entries(updates)) {
@@ -2239,19 +2344,27 @@ async function startServer() {
           if (!p.startsWith('data/') && !p.startsWith('config/')) {
             full = basePath ? `${basePath}/${p}` : p;
           }
-          setValueByPath(db, full, v);
-          appliedUpdates[full] = v;
+          if (full === 'isExplicitReopen') continue;
+          const r = applyGenericWrite(db, full, v, { hasRole, setter });
+          if ('applied' in r) appliedUpdates[full] = r.value;
+          else skipped.push({ index, reason: skipReason(r) });
         }
         processed++;
       } else if (type === 'remove' && pathStr) {
-        if (pathStr.startsWith('data/maintenanceTickets')) {
-          const parts = pathStr.split('/').filter(Boolean);
-          if (parts.length >= 4) {
-            cleanupDeletedTicket(db, parts[3], parts[2]);
+        const r = applyGenericWrite(db, pathStr, null, {
+          isRemove: true,
+          hasRole,
+          setter: (d, p) => {
+            const parts = p.split('/').filter(Boolean);
+            if (parts[0] === 'data' && parts[1] === 'maintenanceTickets' && parts.length >= 4) cleanupDeletedTicket(d, parts[3], parts[2]);
+            setValueByPath(d, p, null);
           }
-        }
-        setValueByPath(db, pathStr, null);
-        appliedUpdates[pathStr] = null;
+        });
+        if ('applied' in r) appliedUpdates[pathStr] = null;
+        else skipped.push({ index, reason: skipReason(r) });
+        processed++;
+      } else if ((type === 'delete-ticket' || type === 'clear-reported-tickets') && !hasRole(TICKET_ROLES)) {
+        skipped.push({ index, reason: 'role_session_required' });
         processed++;
       } else if (type === 'delete-ticket') {
         cleanupDeletedTicket(db, op.ticketId, op.date, op.whatsappMessageId, op.rideId, op.problem);
@@ -2280,12 +2393,17 @@ async function startServer() {
       }
     }
 
+    if (Object.keys(appliedUpdates).some(touchesDateSync)) {
+      restoreDateSync(db, previousDateSync);
+      for (const p of Object.keys(appliedUpdates).filter(touchesDateSync)) appliedUpdates[p] = getValueByPath(db, p) ?? null;
+    }
+
     if (Object.keys(appliedUpdates).some(k => k.includes('historyLog'))) {
       trimHistoryLogs(db);
     }
 
     saveDatabaseToDisk({ type: 'update', updates: appliedUpdates, senderId });
-    res.json({ success: true, processed, version: db.version });
+    res.json({ success: true, processed, skipped, version: db.version });
   });
 
   // =========================================================================
@@ -2471,7 +2589,7 @@ async function startServer() {
   app.get('/api/ticket-sales/counters', (req, res) => {
     const db = loadDatabase();
     const counters = getStandardCounters(db);
-    const activeDate = db.config?.appConfig?.activeOperationalDate || getDhakaDateString();
+    const activeDate = getDhakaDateString();
     const todaySales = db.data?.ticketSalesData?.[activeDate] || {};
 
     const enriched = counters.map((c: StandardCounter) => {
@@ -2496,7 +2614,7 @@ async function startServer() {
     try {
       const db = loadDatabase();
       const counters = getStandardCounters(db);
-      const activeOperationalDate = db.config?.appConfig?.activeOperationalDate || getDhakaDateString();
+      const activeOperationalDate = getDhakaDateString();
       const requestedDate = req.query.date ? String(req.query.date).trim() : '';
       const startDate = req.query.startDate ? String(req.query.startDate).trim() : '';
       const endDate = req.query.endDate ? String(req.query.endDate).trim() : '';
@@ -2665,7 +2783,7 @@ async function startServer() {
 
       const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
         ? date.trim()
-        : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+        : getDhakaDateString();
 
       if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
       if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -2780,7 +2898,7 @@ async function startServer() {
       const counters = getStandardCounters(db);
       const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
         ? date.trim()
-        : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+        : getDhakaDateString();
 
       if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
       if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -2918,7 +3036,7 @@ async function startServer() {
       const access = getTicketApiAccess(req);
       const db = loadDatabase();
       const counters = getStandardCounters(db);
-      const activeDate = db.config?.appConfig?.activeOperationalDate || getDhakaDateString();
+      const activeDate = getDhakaDateString();
       const ticketSalesData = db.data?.ticketSalesData || {};
       const assignments = db.data?.ticketSalesAssignments || {};
       const packageSales = db.data?.packageSales || {};
@@ -2984,7 +3102,7 @@ async function startServer() {
       const counters = getStandardCounters(db);
 
       const targetCounterId = req.params.counterId || req.body?.counterId;
-      const targetDate = req.params.date || req.body?.date || db.config?.appConfig?.activeOperationalDate || getDhakaDateString();
+      const targetDate = req.params.date || req.body?.date || getDhakaDateString();
       const countInput = req.body?.count !== undefined ? req.body.count : req.body?.value;
       const unitPriceInput = req.body?.unitPrice;
       const soldBy = req.body?.soldBy || access.caller;
@@ -3091,7 +3209,7 @@ async function startServer() {
       const counters = getStandardCounters(db);
 
       const targetCounterId = req.params.counterId || req.query.counterId || req.body?.counterId;
-      const targetDate = req.params.date || req.query.date || req.body?.date || db.config?.appConfig?.activeOperationalDate || getDhakaDateString();
+      const targetDate = req.params.date || req.query.date || req.body?.date || getDhakaDateString();
       const reason = req.query.reason || req.body?.reason || 'Full Access administrative reset';
       const authorizedBy = req.query.authorizedBy || req.body?.authorizedBy || access.caller;
       const senderId = req.body?.senderId || 'ticket-sales-full-access-delete';
@@ -3207,7 +3325,7 @@ async function startServer() {
 
       const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
         ? date.trim()
-        : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+        : getDhakaDateString();
 
       if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
       if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -3287,7 +3405,7 @@ async function startServer() {
       const counters = getStandardCounters(db);
       const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
         ? date.trim()
-        : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+        : getDhakaDateString();
 
       if (!sales || (typeof sales !== 'object')) {
         return res.status(400).json({ success: false, error: 'sales object or array is required' });
@@ -3392,7 +3510,7 @@ async function startServer() {
       const counters = getStandardCounters(db);
       const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
         ? date.trim()
-        : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+        : getDhakaDateString();
 
       if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
       if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -3865,7 +3983,7 @@ async function startServer() {
 
         const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
           ? date.trim()
-          : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+          : getDhakaDateString();
 
         if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
         if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -3940,7 +4058,7 @@ async function startServer() {
 
         const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
           ? date.trim()
-          : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+          : getDhakaDateString();
 
         if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
         if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -4011,7 +4129,7 @@ async function startServer() {
 
         const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
           ? date.trim()
-          : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+          : getDhakaDateString();
 
         if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
         if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -4080,7 +4198,7 @@ async function startServer() {
 
         const targetDate = (date && typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()))
           ? date.trim()
-          : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+          : getDhakaDateString();
 
         if (!db.data.ticketSalesData) db.data.ticketSalesData = {};
         if (!db.data.ticketSalesData[targetDate]) db.data.ticketSalesData[targetDate] = {};
@@ -4134,7 +4252,7 @@ async function startServer() {
         const counters = getStandardCounters(db);
         const targetDate = (req.body?.date && typeof req.body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date.trim()))
           ? req.body.date.trim()
-          : (db.config?.appConfig?.activeOperationalDate || getDhakaDateString());
+          : getDhakaDateString();
         const daySales = db.data?.ticketSalesData?.[targetDate] || {};
 
         let totalTickets = 0;
@@ -5150,7 +5268,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/management/parse-report', (req, res) => {
+  app.post('/api/management/parse-report', needRole(REPORT_ROLES), (req, res) => {
     const { rawText, date, senderName } = req.body || {};
     if (!rawText || typeof rawText !== 'string') {
       return res.status(400).json({ error: 'rawText is required' });
@@ -5847,7 +5965,7 @@ async function startServer() {
   });
 
   // Reset processed WhatsApp message IDs (re-seeds only from actual existing tickets)
-  app.post('/api/whatsapp/reset-processed', (req, res) => {
+  app.post('/api/whatsapp/reset-processed', needRole(ADMIN_ROLES), (req, res) => {
     processedWhatsAppMessageIds.clear();
     const db = loadDatabase();
     const existingTicketMsgIds = new Set<string>();
@@ -5934,38 +6052,67 @@ async function startServer() {
     }
     const db = loadDatabase();
     const isExplicitReopen = Boolean(req.body.isExplicitReopen || updates.isExplicitReopen);
-    for (const [p, val] of Object.entries(updates)) {
-      setValueByPath(db, p, val, isExplicitReopen);
+    const entries = Object.entries(updates).filter(([p]) => p !== 'isExplicitReopen');
+    if (entries.some(([p]) => pathSegments(p).some(s => FORBIDDEN_SEGMENTS.has(s)))) return res.status(400).json({ error: 'invalid_path' });
+    const hasRole = callerHasRole(req);
+    const applied: Record<string, any> = {};
+    const forbidden = new Set<string>();
+    let ignored = 0;
+    const previousDateSync = snapshotDateSync(db);
+    for (const [p, val] of entries) {
+      const r = applyGenericWrite(db, p, val, { hasRole, setter: (d, path, v) => setValueByPath(d, path, v, isExplicitReopen) });
+      if ('applied' in r) applied[p] = r.value;
+      else if ('forbidden' in r) r.forbidden.forEach(x => forbidden.add(x));
+      else ignored++;
     }
-    if (Object.keys(updates).some(k => k.includes('historyLog'))) {
-      trimHistoryLogs(db);
+    if (Object.keys(applied).some(touchesDateSync)) {
+      restoreDateSync(db, previousDateSync);
+      for (const p of Object.keys(applied).filter(touchesDateSync)) applied[p] = getValueByPath(db, p) ?? null;
     }
-    saveDatabaseToDisk({ type: 'update', updates, senderId });
-    res.json({ success: true, version: db.version });
+    if (Object.keys(applied).length) {
+      if (Object.keys(applied).some(k => k.includes('historyLog'))) {
+        trimHistoryLogs(db);
+      }
+      saveDatabaseToDisk({ type: 'update', updates: applied, senderId, ...(isExplicitReopen ? { isExplicitReopen } : {}) });
+    }
+    if (forbidden.size) return res.status(403).json({ error: 'role_session_required', roles: [...forbidden], applied: Object.keys(applied).length });
+    res.json({ success: true, version: db.version, ...(ignored ? { ignored: true } : {}) });
   });
 
   // Remove path
   app.post('/api/db/remove', (req, res) => {
-    const { path: pathStr, senderId } = req.body;
-    if (!pathStr) {
+    const { path: rawPath, senderId } = req.body;
+    if (!rawPath) {
       return res.status(400).json({ error: 'path is required' });
     }
+    const pathStr = String(rawPath);
     const db = loadDatabase();
-    if (pathStr.startsWith('data/maintenanceTickets')) {
-      const parts = pathStr.split('/').filter(Boolean);
-      if (parts.length >= 4) {
-        const targetDate = parts[2];
-        const targetId = parts[3];
-        cleanupDeletedTicket(db, targetId, targetDate);
+    const previousDateSync = snapshotDateSync(db);
+    const result = applyGenericWrite(db, pathStr, null, {
+      isRemove: true,
+      hasRole: callerHasRole(req),
+      setter: (d, p) => {
+        if (p.startsWith('data/maintenanceTickets')) {
+          const parts = p.split('/').filter(Boolean);
+          if (parts.length >= 4) cleanupDeletedTicket(d, parts[3], parts[2]);
+        }
+        setValueByPath(d, p, null);
       }
+    });
+    if ('invalid' in result) return res.status(400).json({ error: 'invalid_path' });
+    if ('ignored' in result) return res.json({ success: true, ignored: true, version: db.version });
+    if ('forbidden' in result) return res.status(403).json({ error: 'role_session_required', roles: result.forbidden });
+    if (touchesDateSync(pathStr)) {
+      restoreDateSync(db, previousDateSync);
+      saveDatabaseToDisk({ type: 'set', path: pathStr, value: getValueByPath(db, pathStr) ?? null, senderId });
+    } else {
+      saveDatabaseToDisk({ type: 'remove', path: pathStr, senderId });
     }
-    setValueByPath(db, pathStr, null);
-    saveDatabaseToDisk({ type: 'remove', path: pathStr, senderId });
     res.json({ success: true, version: db.version });
   });
 
   // Clear all maintenance issue records across database and disk
-  app.post('/api/maintenance/clear-all', (req, res) => {
+  app.post('/api/maintenance/clear-all', needRole(TICKET_ROLES), (req, res) => {
     const { senderId } = req.body || {};
     const db = loadDatabase();
     db.data.maintenanceTickets = {};
@@ -6005,7 +6152,7 @@ async function startServer() {
   });
 
   // Permanently delete a maintenance ticket across all dates and cache
-  app.post('/api/db/delete-ticket', (req, res) => {
+  app.post('/api/db/delete-ticket', needRole(TICKET_ROLES), (req, res) => {
     const { ticketId, date, whatsappMessageId, rideId, problem, senderId } = req.body;
     if (!ticketId && !whatsappMessageId) {
       return res.status(400).json({ error: 'ticketId or whatsappMessageId is required' });
@@ -6042,7 +6189,7 @@ async function startServer() {
   });
 
   // Permanently clear all reported maintenance tickets for a given date
-  app.post('/api/db/clear-reported-tickets', (req, res) => {
+  app.post('/api/db/clear-reported-tickets', needRole(TICKET_ROLES), (req, res) => {
     const { date, senderId } = req.body;
     if (!date) {
       return res.status(400).json({ error: 'date is required' });
@@ -6098,7 +6245,7 @@ async function startServer() {
   });
 
   // Reset specific day data
-  app.post('/api/db/reset-day', (req, res) => {
+  app.post('/api/db/reset-day', needRole(ADMIN_ROLES), (req, res) => {
     const { date, senderId } = req.body;
     if (!date) {
       return res.status(400).json({ error: 'date is required' });
@@ -6118,7 +6265,7 @@ async function startServer() {
   });
 
   // Clean data older than cutoff date (e.g. 3 months / 90 days)
-  app.post('/api/db/clean-older-than', (req, res) => {
+  app.post('/api/db/clean-older-than', needRole(ADMIN_ROLES), (req, res) => {
     const { cutoffDate, senderId } = req.body;
     if (!cutoffDate) {
       return res.status(400).json({ error: 'cutoffDate is required' });
@@ -6143,7 +6290,7 @@ async function startServer() {
   });
 
   // Reset 3-Month cycle, archive operational day logs, and start next interval
-  app.post('/api/db/reset-cycle', (req, res) => {
+  app.post('/api/db/reset-cycle', needRole(ADMIN_ROLES), (req, res) => {
     const { newCycleStartDate, senderId } = req.body;
     const db = loadDatabase();
     const collections = ['dailyCounts', 'ticketSalesData', 'operatorAssignments', 'ticketSalesAssignments', 'attendance', 'packageSales', 'maintenanceTickets'];
@@ -6163,7 +6310,7 @@ async function startServer() {
     endDateObj.setMonth(endDateObj.getMonth() + 3);
     const newCycleEndDate = endDateObj.toISOString().split('T')[0];
 
-    if (!db.config.appConfig) db.config.appConfig = {};
+    ensureAppConfig(db);
     db.config.appConfig.cycleStartDate = newCycleStartDate;
     db.config.appConfig.cycleEndDate = newCycleEndDate;
     db.config.appConfig.cycleIntervalMonths = 3;
@@ -6174,8 +6321,7 @@ async function startServer() {
     res.json({ success: true, message: `Next 3-Month interval initialized from ${newCycleStartDate} to ${newCycleEndDate}.` });
   });
 
-  // Backup and restore need BACKUP_PASSWORD, which only lives on the server. The admin role password
-  // cannot guard them because /api/db sends appConfig (including that password) to every browser.
+  // Backup and restore need BACKUP_PASSWORD, which only lives on the server and is given only to the main admin.
   const BACKUP_PASSWORD = String(process.env.BACKUP_PASSWORD || '');
   const backupAttempts = createAttemptLimiter(5, 10 * 60 * 1000);
   const RESTORE_POINTS_DIR = path.join(DATA_DIR, 'restore-points');
@@ -6216,7 +6362,7 @@ async function startServer() {
         if (fs.statSync(filePath).isFile()) images[name] = fs.readFileSync(filePath).toString('base64');
       }
     }
-    return { format: 'tfw-backup', formatVersion: 1, createdAt: new Date().toISOString(), database, images };
+    return { format: 'tfw-backup', formatVersion: 1, createdAt: new Date().toISOString(), database: backupView(database), images };
   }
 
   function saveRestorePoint() {
@@ -6238,7 +6384,7 @@ async function startServer() {
     res.json(backup);
   });
 
-  app.post('/api/admin/restore', (req, res) => {
+  app.post('/api/admin/restore', async (req, res) => {
     if (!checkBackupPassword(req, res)) return;
     const file = req.body?.backup;
     const isFullBackup = file?.format === 'tfw-backup';
@@ -6254,20 +6400,32 @@ async function startServer() {
       return res.status(500).json({ error: 'safety_copy_failed', message: 'Could not save a safety copy of the current data, so nothing was restored.' });
     }
 
-    const waConfig = db.config.whatsappConfig;
-    if (waConfig && typeof waConfig === 'object') {
-      delete waConfig.apiTokenInstance;
-      delete waConfig.whapiToken;
+    // Restoring never changes a password that exists now; an older backup only adds the ones the server lacks.
+    let added: Awaited<ReturnType<typeof prepareLegacySecrets>>;
+    try {
+      added = await prepareLegacySecrets(extractLegacySecrets(db), memoryDb);
+    } catch (e) {
+      console.error('Restore aborted: could not read the passwords in the backup:', e);
+      return res.status(500).json({ error: 'restore_failed', message: 'The backup could not be read, so nothing was restored.' });
     }
+    const config = stripConfig(db.config);
+    const data = stripData(db.data);
     // Backups made before data/images was used hold photos and logos inline.
-    externalizeImages(IMAGES_DIR, db);
-    historyLogAsObject(db.data);
+    externalizeImages(IMAGES_DIR, { config, data });
+    historyLogAsObject(data);
+    const authSecrets = JSON.parse(JSON.stringify(memoryDb?.config?.authSecrets || { v: 1, roles: {} }));
+    if (!authSecrets.roles || typeof authSecrets.roles !== 'object') authSecrets.roles = {};
+    for (const [k, v] of Object.entries(added.roles)) if (!authSecrets.roles[k]) authSecrets.roles[k] = v;
+    const staffCredentials = { ...(memoryDb?.data?.staffCredentials || {}) };
+    for (const [k, v] of Object.entries(added.staff)) if (!staffCredentials[k]) staffCredentials[k] = v;
+    config.authSecrets = authSecrets;
+    data.staffCredentials = staffCredentials;
     // Jump past every client's cached version so all devices take the restored data instead of their own copy.
     memoryDb = {
       version: Math.max(Number(memoryDb?.version) || 0, Number(db.version) || 0) + 10,
       lastUpdated: new Date().toISOString(),
-      config: db.config,
-      data: db.data
+      config,
+      data
     };
 
     let restoredPhotos = 0;
@@ -6474,6 +6632,37 @@ async function startServer() {
 
     // Cache immutable assets for 1 year for instantaneous 0.2s reloads
     const assetsDir = path.join(distPath, 'assets');
+    // Bundles are compressed once per file and encoding. Compressing per download held ~3 MB per response, and a whole
+    // shift opening the app after a deploy pushed the 512 MB container past its memory limit in a load test.
+    const encodedAssets = new Map<string, Promise<Buffer>>();
+    app.get('/assets/:file', (req, res, next) => {
+      const name = path.basename(String(req.params.file || ''));
+      const file = path.join(assetsDir, name);
+      if (!/\.(js|css)$/.test(name) || !fs.existsSync(file)) return next();
+      const enc = req.acceptsEncodings('br', 'gzip');
+      if (enc !== 'br' && enc !== 'gzip') return next();
+      const key = `${enc}:${name}`;
+      let pending = encodedAssets.get(key);
+      if (!pending) {
+        pending = new Promise<Buffer>((resolve, reject) => {
+          const done = (err: Error | null, out: Buffer) => (err ? reject(err) : resolve(out));
+          const body = fs.readFileSync(file);
+          if (enc === 'br') zlib.brotliCompress(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 6, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length } }, done);
+          else zlib.gzip(body, { level: 6 }, done);
+        });
+        encodedAssets.set(key, pending);
+        pending.catch(() => encodedAssets.delete(key));
+      }
+      pending.then((body) => {
+        if (res.headersSent || res.destroyed) return;
+        res.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript; charset=UTF-8' : 'text/css; charset=UTF-8');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('Content-Encoding', enc);
+        res.vary('Accept-Encoding');
+        res.setHeader('Content-Length', body.length);
+        res.end(body);
+      }, () => next());
+    });
     if (fs.existsSync(assetsDir)) {
       app.use('/assets', express.static(assetsDir, {
         maxAge: '1y',
@@ -6481,8 +6670,13 @@ async function startServer() {
       }));
     }
 
+    // index.html must never come from a cache, or a reload keeps the old bundle for an hour.
     app.use(express.static(distPath, {
-      maxAge: '1h'
+      maxAge: '1h',
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
     }));
 
     app.get('*', (req, res) => {

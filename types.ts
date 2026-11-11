@@ -109,23 +109,15 @@ export interface AppConfig {
   loginHeading?: string;
   loginSubheading?: string;
   announcementText?: string;
-  managementPassword?: string;
-  adminPassword?: string;
-  operationOfficerPassword?: string;
-  maintenancePassword?: string;
   maintenanceKpiUser?: string;
-  maintenanceKpiPassword?: string;
   infoDeskUser?: string;
-  infoDeskPassword?: string;
-  infoDeskEditPassword?: string;
-  infoDeskAddPassword?: string;
   informationDeskUser?: string;
-  informationDeskPassword?: string;
-  cxPassword?: string;
   githubUrl?: string;
   cutoffHour?: number;
   themeColor?: string;
+  // Legacy: older bundles still write this on every date pick, so current clients never read it.
   activeOperationalDate?: string;
+  activeOperationalDateSync?: { date: string; setOnDay: string; setAt: string; by?: string };
   activeView?: string;
   cycleStartDate?: string;
   cycleEndDate?: string;
@@ -149,11 +141,16 @@ export interface AppConfig {
   managementNotes?: Record<string, ManagementSummaryNotes>;
 }
 
-export interface StaffCredential {
-  password: string;
-  recoveryPin: string;
+// Passwords and recovery PINs stay on the server; clients only learn that a credential exists.
+export interface StaffCredentialStatus {
   createdAt: string;
   updatedAt?: string;
+}
+
+export type { RoleSecretKey } from './authShared';
+
+export interface AuthStatus {
+  roles: Partial<Record<import('./authShared').RoleSecretKey, boolean>>;
 }
 
 export interface AttendanceRecord {
