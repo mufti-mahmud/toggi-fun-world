@@ -7,7 +7,6 @@ import {
   Eye,
   EyeOff,
   Mail,
-  Plus,
   UserPlus,
   Check,
   Building,
@@ -112,7 +111,7 @@ const DEFAULT_PERSONNEL: StaffPersonnel[] = [
 ];
 
 export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkManagement, currentUser }) => {
-  // Login modal state for TBG Park Management
+  // Login modal state for TBG Park Maintenance
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
   // Native Fullscreen state & toggle
@@ -479,9 +478,9 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
           </div>
 
           {/* -------------------------------------------------------------------
-              CARD 2: TBG PARK MANAGEMENT
+              CARD 2: TBG PARK MAINTENANCE
               - Image: Small & 4K resolution
-              - Title: TBG Park Management
+              - Title: TBG Park Maintenance
               - Text: Maintenance decision
               - Action Button: Access Portal (triggers login modal)
           ------------------------------------------------------------------- */}
@@ -490,7 +489,7 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
             <div className="relative h-48 sm:h-56 md:h-52 lg:h-56 w-full overflow-hidden bg-[#081528] flex items-center justify-center">
               <img 
                 src="/assets/aistudio/TBG_7e8eece1.JPG" 
-                alt="TBG Park Management" 
+                alt="TBG Park Maintenance" 
                 className="w-full h-full object-cover object-center filter contrast-105"
                 onError={(e) => {
                   const target = e.currentTarget;
@@ -510,7 +509,7 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
             <div className="p-6 flex-1 flex flex-col justify-between space-y-5">
               <div className="space-y-2">
                 <h2 className="text-xl font-bold text-white tracking-tight">
-                  TBG Park Management
+                  TBG Park Maintenance
                 </h2>
 
                 <p className="text-xs font-semibold text-amber-400">
@@ -536,19 +535,50 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
           </div>
 
           {/* -------------------------------------------------------------------
-              CARD 3: SPACE FOR FUTURE ENTRY
-              - Blank / Reserved space as requested
+              CARD 3: BASHUNDHARA CENTRAL PARK
+              - Image: park logo (shown whole on white, not cropped)
+              - Status: Coming soon (no portal yet, so the button is inactive)
+              - Location: Bashundhara R/A, Dhaka
           ------------------------------------------------------------------- */}
-          <div className="rounded-2xl bg-[#112240]/40 border-2 border-dashed border-[#233f6d] hover:border-blue-400/60 transition-all duration-300 shadow-[0_10px_30px_rgba(2,12,27,0.4)] flex flex-col justify-center items-center p-8 text-center min-h-[260px]">
-            <div className="w-12 h-12 rounded-xl bg-[#0a192f] border border-[#233f6d] text-blue-400 flex items-center justify-center mb-4 shadow-inner">
-              <Plus className="w-6 h-6 stroke-[1.5]" />
+          <div className="rounded-2xl bg-[#112240] border border-[#233f6d] transition-all duration-300 shadow-[0_12px_35px_rgba(2,12,27,0.7)] flex flex-col overflow-hidden">
+            <div className="relative h-48 sm:h-56 md:h-52 lg:h-56 w-full overflow-hidden bg-white flex items-center justify-center">
+              <img
+                src="/assets/images/bashundhara-central-park-logo.jpg"
+                alt="Bashundhara Central Park"
+                width={291}
+                height={190}
+                className="max-h-full max-w-full object-contain p-4"
+              />
             </div>
-            <h3 className="text-base font-bold text-slate-300">
-              Space for Future Entry
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Tanvir Bashundhara Group Park Portals
-            </p>
+
+            <div className="p-6 flex-1 flex flex-col justify-between space-y-5">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-400" />
+                  <span className="text-xs font-semibold text-amber-400">
+                    Coming soon
+                  </span>
+                </div>
+
+                <h2 className="text-xl font-bold text-white tracking-tight">
+                  Bashundhara Central Park
+                </h2>
+
+                <p className="text-xs font-medium text-slate-300">
+                  Bashundhara R/A, Dhaka
+                </p>
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  disabled
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-300 bg-slate-700 cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <span>Coming soon</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </main>
@@ -582,7 +612,7 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
       </footer>
 
       {/* =========================================================================
-          SIMPLIFIED LOGIN VIEW (TBG Park Management)
+          SIMPLIFIED LOGIN VIEW (TBG Park Maintenance)
           - Only displays Username, Password, and "+ Add Staff" option
           - Clutter, extra input fields, and prefilled staff lists removed
       ========================================================================= */}
@@ -608,7 +638,7 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white tracking-tight">
-                  TBG Park Management
+                  TBG Park Maintenance
                 </h3>
                 <p className="text-xs text-amber-400 font-semibold uppercase tracking-wide">
                   Sign In to Access Dashboard
@@ -722,7 +752,7 @@ export const TBGCentralPortal: React.FC<Props> = ({ onLaunchToggi, onLaunchParkM
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white tracking-tight">Add Staff</h3>
-                  <p className="text-[11px] text-slate-400">Register new personnel for TBG Park Management</p>
+                  <p className="text-[11px] text-slate-400">Register new personnel for TBG Park Maintenance</p>
                 </div>
               </div>
             </div>

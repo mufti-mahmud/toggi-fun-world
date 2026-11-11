@@ -268,7 +268,7 @@ export const TBGParkManagementWrapper: React.FC<Props> = ({
           </button>
 
           <span className="text-xs text-slate-400 font-medium">
-            Tanvir Bashundhara Group · Park Management Login
+            Tanvir Bashundhara Group · Park Maintenance Login
           </span>
         </div>
 
@@ -286,7 +286,7 @@ export const TBGParkManagementWrapper: React.FC<Props> = ({
               </div>
               <div>
                 <h1 className="text-lg font-bold text-white tracking-tight">
-                  TBG Park Management
+                  TBG Park Maintenance
                 </h1>
                 <p className="text-xs text-amber-400 font-semibold uppercase tracking-wide">
                   Sign In to Access Dashboard
@@ -397,7 +397,7 @@ export const TBGParkManagementWrapper: React.FC<Props> = ({
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-white tracking-tight">Add Staff</h3>
-                    <p className="text-[11px] text-slate-400">Register new personnel for TBG Park Management</p>
+                    <p className="text-[11px] text-slate-400">Register new personnel for TBG Park Maintenance</p>
                   </div>
                 </div>
               </div>
@@ -549,7 +549,7 @@ export const TBGParkManagementWrapper: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Main TBG Park Management Sub-Application with authenticated user */}
+      {/* Main TBG Park Maintenance Sub-Application with authenticated user */}
       <div className="flex-1">
         <ParkManagementApp authenticatedUser={authenticatedUser} />
       </div>
