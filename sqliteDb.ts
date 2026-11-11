@@ -208,6 +208,13 @@ export function getSqliteDatabase(dbPath: string = DEFAULT_SQLITE_PATH): Databas
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_history_log_id ON history_logs(log_id);
       CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
+      CREATE TABLE IF NOT EXISTS data_collections (
+        collection TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        row_hash TEXT,
+        PRIMARY KEY (collection, item_key)
+      );
     `);
   } catch (_) {}
 
@@ -272,8 +279,11 @@ function extractAllTickets(rawTickets: any, fallbackDate: string): any[] {
   return results;
 }
 
-const SYNCED_TABLES = ['rides', 'staff', 'counters', 'packages', 'maintenance_tickets', 'daily_operations', 'history_logs', 'whatsapp_management_reports'] as const;
+const SYNCED_TABLES = ['rides', 'staff', 'counters', 'packages', 'maintenance_tickets', 'daily_operations', 'history_logs', 'whatsapp_management_reports', 'data_collections'] as const;
 type SyncedTable = typeof SYNCED_TABLES[number];
+
+// data_collections keys are "<collection>\u0001<item_key>": '' holds the section ('{}' for an object), 'k:<key>' one entry of it.
+const ITEM_SEPARATOR = '\u0001';
 
 const KEY_SQL: Record<SyncedTable, string> = {
   rides: 'CAST(id AS TEXT)',
@@ -283,7 +293,8 @@ const KEY_SQL: Record<SyncedTable, string> = {
   maintenance_tickets: 'CAST(id AS TEXT)',
   daily_operations: 'operational_date',
   history_logs: 'CAST(COALESCE(log_id, id) AS TEXT)',
-  whatsapp_management_reports: 'report_date'
+  whatsapp_management_reports: 'report_date',
+  data_collections: 'collection || char(1) || item_key'
 };
 
 const DELETE_SQL: Record<SyncedTable, string> = {
@@ -294,7 +305,8 @@ const DELETE_SQL: Record<SyncedTable, string> = {
   maintenance_tickets: 'DELETE FROM maintenance_tickets WHERE id = ?',
   daily_operations: 'DELETE FROM daily_operations WHERE operational_date = ?',
   history_logs: 'DELETE FROM history_logs WHERE log_id = ? OR (log_id IS NULL AND id = ?)',
-  whatsapp_management_reports: 'DELETE FROM whatsapp_management_reports WHERE report_date = ?'
+  whatsapp_management_reports: 'DELETE FROM whatsapp_management_reports WHERE report_date = ?',
+  data_collections: 'DELETE FROM data_collections WHERE collection = ? AND item_key = ?'
 };
 
 const NUMERIC_KEY_TABLES = new Set<SyncedTable>(['rides', 'staff', 'counters']);
@@ -317,10 +329,17 @@ const INSERT_SQL: Record<SyncedTable, string> = {
   history_logs: `INSERT INTO history_logs (log_id, timestamp, user_name, action, details, row_hash) VALUES (?, ?, ?, ?, ?, ?)`,
   whatsapp_management_reports: `INSERT OR REPLACE INTO whatsapp_management_reports (
       report_date, timestamp, sender_name, sender_phone, group_name, kiddo_sale, xtreme_sale, vip_concierge_sale, entry_ticket_sale, total_foot_fall, discount, total_revenue, counter_breakdown_json, raw_message, raw_json, row_hash
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  data_collections: `INSERT OR REPLACE INTO data_collections (collection, item_key, value_json, row_hash) VALUES (?, ?, ?, ?)`
 };
 
 const DAILY_COLLECTIONS = ['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales'];
+const TABLE_DATA_KEYS = new Set(['maintenanceTickets', ...DAILY_COLLECTIONS, 'historyLog', 'whatsappManagementReports']);
+
+/** False for data sections without a table of their own (staff credentials, ride pre-checks, park issues, ...). */
+export function isTableBackedDataKey(key: string): boolean {
+  return TABLE_DATA_KEYS.has(key);
+}
 
 // Mirror of the key -> row_hash pairs in SQLite; null means it is read from SQLite again at the next save.
 let storedHashes: Map<string, Map<string, string | null>> | null = null;
@@ -331,6 +350,7 @@ let metaMarkerWritten = false;
 const keptUnknownLogged = new Set<string>();
 
 const JSON_DATES_MARKER = 'json_only_dates_merged';
+const JSON_SECTIONS_MARKER = 'json_sections_merged';
 
 function rowHash(text: string): string {
   return crypto.createHash('sha1').update(text).digest('base64');
@@ -458,6 +478,21 @@ function emitRows(appDb: any, lastUpdated: string, put: RowSink): void {
       str(rep.rawMessage), raw
     ]);
   }
+
+  // One row per entry, so a new staff credential or pre-check rewrites only its own row.
+  for (const [name, value] of Object.entries(data)) {
+    if (TABLE_DATA_KEYS.has(name)) continue;
+    const isMap = value !== null && typeof value === 'object' && !Array.isArray(value);
+    const base = isMap ? '{}' : JSON.stringify(value);
+    if (base === undefined) continue;
+    put('data_collections', `${name}${ITEM_SEPARATOR}`, base, [name, '', base]);
+    if (!isMap) continue;
+    for (const [k, v] of Object.entries(value as Record<string, any>)) {
+      const json = JSON.stringify(v);
+      if (json === undefined) continue;
+      put('data_collections', `${name}${ITEM_SEPARATOR}k:${k}`, json, [name, `k:${k}`, json]);
+    }
+  }
 }
 
 /** History records as [key, record]; the app keeps them as an object keyed by Date.now(), older data as an array. */
@@ -553,6 +588,16 @@ export function jsonOnlyDatesAlreadyMerged(dbPath: string = DEFAULT_SQLITE_PATH)
   }
 }
 
+/** True once a build that keeps History and every other data section in SQLite has saved. */
+export function jsonSectionsAlreadyMerged(dbPath: string = DEFAULT_SQLITE_PATH): boolean {
+  try {
+    const db = getSqliteDatabase(dbPath);
+    return Boolean(db.prepare('SELECT 1 AS x FROM app_meta WHERE key = ?').get(JSON_SECTIONS_MARKER));
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * Write only the rows that changed since the last save and delete rows that left memoryDb, in one transaction
  */
@@ -577,6 +622,9 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
       if (table === 'history_logs') {
         const n = Number(key);
         cachedStatement(db, DELETE_SQL[table]).run(Number.isFinite(n) ? n : key, Number.isFinite(n) ? n : -1);
+      } else if (table === 'data_collections') {
+        const at = key.indexOf(ITEM_SEPARATOR);
+        cachedStatement(db, DELETE_SQL[table]).run(key.slice(0, at), key.slice(at + 1));
       } else {
         cachedStatement(db, DELETE_SQL[table]).run(NUMERIC_KEY_TABLES.has(table) ? Number(key) : key);
       }
@@ -635,6 +683,7 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
 
     if (!metaMarkerWritten) {
       cachedStatement(db, 'INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)').run(JSON_DATES_MARKER, lastUpdated);
+      cachedStatement(db, 'INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)').run(JSON_SECTIONS_MARKER, lastUpdated);
     }
 
     db.exec('COMMIT;');
@@ -890,6 +939,27 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
             counterBreakdown: row.counter_breakdown_json ? JSON.parse(row.counter_breakdown_json) : []
           };
           markLoaded('whatsapp_management_reports', row.report_date);
+        } catch {}
+      }
+    } catch (_) {}
+
+    // Other data sections: the section row first, then the entries of an object section.
+    try {
+      const sectionRows = db.prepare('SELECT collection, item_key, value_json FROM data_collections').all() as any[];
+      for (const row of sectionRows) {
+        if (row.item_key !== '' || TABLE_DATA_KEYS.has(row.collection)) continue;
+        try {
+          data[row.collection] = JSON.parse(row.value_json);
+          markLoaded('data_collections', `${row.collection}${ITEM_SEPARATOR}`);
+        } catch {}
+      }
+      for (const row of sectionRows) {
+        const target = data[row.collection];
+        if (!String(row.item_key).startsWith('k:') || TABLE_DATA_KEYS.has(row.collection)) continue;
+        if (!target || typeof target !== 'object' || Array.isArray(target)) continue;
+        try {
+          target[String(row.item_key).slice(2)] = JSON.parse(row.value_json);
+          markLoaded('data_collections', `${row.collection}${ITEM_SEPARATOR}${row.item_key}`);
         } catch {}
       }
     } catch (_) {}

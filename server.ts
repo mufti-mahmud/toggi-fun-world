@@ -17,7 +17,7 @@ import {
   getDhakaDateString,
   formatDhakaTime
 } from './constants';
-import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite, adoptLoadedSqliteState, resetSqliteRowCache, jsonOnlyDatesAlreadyMerged } from './sqliteDb';
+import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase, checkpointSqlite, adoptLoadedSqliteState, resetSqliteRowCache, jsonOnlyDatesAlreadyMerged, jsonSectionsAlreadyMerged, isTableBackedDataKey } from './sqliteDb';
 import { TOGGI_RIDES_IMAGE_MAP } from './data/rideImagesCatalog';
 import { isManagementSalesMessage, parseManagementReportText } from './utils/whatsappManagementParser';
 import { createSiteAuth, readApiKey, safeEqual, clientIp, createAttemptLimiter } from './siteAuth';
@@ -510,6 +510,32 @@ function dropRowsDeletedUnderPreviousBuild(state: any, jsonDb: any) {
   console.warn(`SQLite still held items deleted under the previous build; they are removed now (a copy of tfw.db was kept): ${JSON.stringify(removed)}`);
 }
 
+// Earlier builds kept History and the data sections without a table (staff credentials, ride pre-checks, park issues)
+// only in memory and database.json, so every restart dropped them; database.json's copy is merged in by key.
+function copySectionsFromJson(state: any, jsonDb: any) {
+  const jsonData = jsonDb?.data;
+  if (!jsonData || typeof jsonData !== 'object' || !state?.data) return;
+  const sections: string[] = [];
+  for (const [k, v] of Object.entries(jsonData)) {
+    if (isTableBackedDataKey(k) || v === undefined) continue;
+    state.data[k] = mergeKeyedCollection(state.data[k], v);
+    sections.push(k);
+  }
+  const jsonHistory: any = { historyLog: jsonData.historyLog };
+  historyLogAsObject(jsonHistory);
+  let historyAdded = 0;
+  if (jsonHistory.historyLog && typeof jsonHistory.historyLog === 'object') {
+    if (!state.data.historyLog || typeof state.data.historyLog !== 'object' || Array.isArray(state.data.historyLog)) state.data.historyLog = {};
+    for (const [id, h] of Object.entries(jsonHistory.historyLog)) {
+      if (h && typeof h === 'object' && !(id in state.data.historyLog)) {
+        state.data.historyLog[id] = h;
+        historyAdded++;
+      }
+    }
+  }
+  if (sections.length || historyAdded) console.log(`Copied from database.json into SQLite: ${sections.join(', ') || 'no other sections'}; ${historyAdded} History record(s).`);
+}
+
 // A device's cache can be behind the server, and saves now delete removed keys, so its sync must not drop keys it has not seen.
 function mergeKeyedCollection(current: any, incoming: any): any {
   if (incoming === undefined) return current;
@@ -540,8 +566,9 @@ function loadDatabase(): any {
         
         // Dates only in database.json are copied once, and again whenever it is newer than SQLite (SQLite saves failing).
         const firstStartOfThisBuild = !jsonOnlyDatesAlreadyMerged();
+        const firstSectionsStart = !jsonSectionsAlreadyMerged();
         const sqliteVersion = Number(sqliteState.version) || 0;
-        if (fs.existsSync(DB_FILE) && (firstStartOfThisBuild || !(readJsonDbVersion() <= sqliteVersion))) {
+        if (fs.existsSync(DB_FILE) && (firstStartOfThisBuild || firstSectionsStart || !(readJsonDbVersion() <= sqliteVersion))) {
           try {
             const jsonDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
             const jsonVersion = Number(jsonDb?.version) || 0;
@@ -555,6 +582,7 @@ function loadDatabase(): any {
               }
             }
             if (firstStartOfThisBuild && jsonVersion >= sqliteVersion) dropRowsDeletedUnderPreviousBuild(sqliteState, jsonDb);
+            if (firstSectionsStart || jsonVersion > sqliteVersion) copySectionsFromJson(sqliteState, jsonDb);
           } catch (_) {}
         }
 
@@ -1623,6 +1651,9 @@ async function startServer() {
             const mergedData = { ...currentData, ...incomingData };
             for (const k of ['attendance', 'operatorAssignments', 'ticketSalesAssignments', 'dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'packageSales', 'whatsappManagementReports', 'historyLog']) {
               if (k in incomingData) mergedData[k] = mergeKeyedCollection(currentData[k], incomingData[k]);
+            }
+            for (const k of Object.keys(incomingData)) {
+              if (!isTableBackedDataKey(k)) mergedData[k] = mergeKeyedCollection(currentData[k], incomingData[k]);
             }
             if (currentData.maintenanceTickets && incomingData.maintenanceTickets) {
               const statusRank: Record<string, number> = { 'solved': 3, 'in-progress': 2, 'reported': 1 };

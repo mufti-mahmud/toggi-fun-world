@@ -33,7 +33,7 @@ export const ACTIVITY_PAGE_SIZE = 5000;
 // Building an Intl.DateTimeFormat per row held on to native memory until GC (874 MB under a request flood).
 const DHAKA_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka', year: 'numeric', month: '2-digit', day: '2-digit' });
 const DHAKA_TIME = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Dhaka', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-const SECRET_KEY = /password|passcode|token|secret|api_?key/i;
+const SECRET_KEY = /password|passcode|token|secret|api_?key|recovery_?pin/i;
 
 let state: 'pending' | 'on' | 'off' = 'pending';
 let db: DatabaseSync | null = null;
