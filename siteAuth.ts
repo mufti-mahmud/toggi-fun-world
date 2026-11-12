@@ -42,6 +42,15 @@ function readCookie(req: express.Request, name: string): string {
   return '';
 }
 
+/** A short hash of the browser's site-session cookie, which tells devices apart behind one address; '' without one. */
+export function siteSessionTag(req: express.Request): string {
+  const value = readCookie(req, COOKIE_NAME);
+  if (!value) return '';
+  // The gate reads the expiry as a number, so leading zeros must not turn one session into several devices.
+  const m = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(value);
+  return crypto.createHash('sha256').update(m ? `v1.${Number(m[1])}.${m[2]}` : value).digest('hex').slice(0, 16);
+}
+
 function isHttps(req: express.Request): boolean {
   return req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 }

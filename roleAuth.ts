@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import type express from 'express';
-import { createAttemptLimiter, safeEqual } from './siteAuth';
+import { createAttemptLimiter, safeEqual, siteSessionTag } from './siteAuth';
 import {
   SECRET_FIELD_RE,
   ROLE_SECRET_KEYS,
@@ -796,7 +796,7 @@ export function requestIp(req: express.Request): string {
 
 export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps) {
   const { getDb, save, logActivity, sessions } = deps;
-  // Keyed per person, so typos by one member of staff never block colleagues behind the park's shared address.
+  // Keyed per device (per person for operators), so one person's typos never block colleagues behind the park's shared address.
   const loginLimiter = createAttemptLimiter(10, 10 * 60 * 1000);
   // Counted per stored secret across all addresses; a short window, because it also blocks the right password.
   const secretLimiter = createAttemptLimiter(30, 5 * 60 * 1000);
@@ -838,7 +838,8 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
     const staffKeyIn = role === 'operator' ? String(b.staffKey).slice(0, 64) : '';
     // The user name is part of the key only where it is checked; elsewhere a new value would mean a fresh allowance.
     const who = role === 'operator' ? staffKeyIn : (role === 'maintenance-kpi' || KIOSK_ROLES.has(role)) ? normUser : '';
-    const limitKey = `${requestIp(req)}|${role}|${who}`;
+    const device = role === 'operator' ? '' : siteSessionTag(req);
+    const limitKey = `${requestIp(req)}|${device}|${role}|${who}`;
     const waitMs = loginLimiter.blockedForMs(limitKey);
     if (waitMs > 0) {
       audit(req, 'login blocked', false, { role, staffKey: staffKeyIn || undefined, purpose, reason: 'too_many_attempts' });
@@ -877,6 +878,7 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
 
     const input = role === 'maintenance-kpi' ? password.trim() : password;
     let via: string | null = null;
+    let matchedKey = '';
     let deps: Record<string, number> = {};
     let blockedMs = 0;
     let busy = false;
@@ -914,11 +916,24 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
         const builtIns = builtInPasswords(k, s);
         if ((s || builtIns.length) && await tryHashes(`role:${k}`, s ? [s.hash, s.legacyHash] : [], builtIns)) {
           via = k;
+          matchedKey = `role:${k}`;
           deps = s ? { [`role:${k}`]: Number(s.pv) || 1 } : { [`none:${k}`]: 0 };
         }
       }
     }
     const actor = staff ? String(staff.operator?.name || '') : '';
+    // Tries sent at once all pass the checks above before any of them is counted, so each is answered as if it arrived now.
+    if (!busy) {
+      const lateMs = Math.max(loginLimiter.blockedForMs(limitKey), via && matchedKey ? secretLimiter.blockedForMs(matchedKey) : 0);
+      if (lateMs > 0) {
+        audit(req, 'login blocked', false, { role, staffKey: staffKeyIn || undefined, purpose, reason: 'too_many_attempts' }, actor);
+        return tooMany(res, lateMs);
+      }
+      for (let i = failedSecrets.length - 1; !via && i >= 0; i--) {
+        const wait = secretLimiter.blockedForMs(failedSecrets[i]);
+        if (wait > 0) { blockedMs = Math.max(blockedMs, wait); failedSecrets.splice(i, 1); }
+      }
+    }
     if (!via) {
       if (busy) {
         audit(req, 'login blocked', false, { role, staffKey: staffKeyIn || undefined, purpose, reason: 'busy' }, actor);
