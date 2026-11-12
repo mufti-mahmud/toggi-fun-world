@@ -12,6 +12,8 @@ RUN npm run build \
 
 ENV NODE_ENV=production
 ENV PORT=3000
+# glibc otherwise keeps each worker thread's freed 16 MB scrypt buffer (~90 MB measured on live); large blocks go back to the OS.
+ENV GLIBC_TUNABLES=glibc.malloc.mmap_threshold=1048576
 EXPOSE 3000
 
 # A persistent volume mounted at /app/data hides the bundled data, so seed it on first start only.
