@@ -238,6 +238,8 @@ export const AdminManager: React.FC<Props> = ({
   const [githubUrl, setGithubUrl] = useState(appConfig.githubUrl || 'https://github.com');
   const [maintenancePassword, setMaintenancePassword] = useState('');
   const [cxPassword, setCxPassword] = useState('');
+  const [managementPassword, setManagementPassword] = useState('');
+  const [infoDeskPassword, setInfoDeskPassword] = useState('');
   const [infoDeskUser, setInfoDeskUser] = useState(appConfig.infoDeskUser || 'admin');
   const [infoDeskEditPassword, setInfoDeskEditPassword] = useState('');
   const [infoDeskAddPassword, setInfoDeskAddPassword] = useState('');
@@ -331,7 +333,9 @@ export const AdminManager: React.FC<Props> = ({
       ['admin', adminPassword, setAdminPassword],
       ['operation-officer', operationOfficerPassword, setOperationOfficerPassword],
       ['maintenance', maintenancePassword, setMaintenancePassword],
+      ['management', managementPassword, setManagementPassword],
       ['cx', cxPassword, setCxPassword],
+      ['information-desk', infoDeskPassword, setInfoDeskPassword],
       ['info-desk-edit', infoDeskEditPassword, setInfoDeskEditPassword],
       ['info-desk-add', infoDeskAddPassword, setInfoDeskAddPassword]
     ];
@@ -3221,6 +3225,30 @@ export const AdminManager: React.FC<Props> = ({
                     </div>
 
                     <div>
+                      <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider block mb-1.5">
+                        Management Password
+                      </label>
+                      <div className="relative">
+                        <input 
+                          type={showPassword ? 'text' : 'password'}
+                          value={managementPassword}
+                          onChange={(e) => setManagementPassword(e.target.value)}
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-purple-500/40 outline-none focus:border-purple-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
+                        />
+                        <SecretBadge isSet={authStatus?.roles?.['management']} />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 cursor-pointer"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
                       <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider block mb-1.5">
                         GitHub Repository URL
                       </label>
@@ -3271,6 +3299,30 @@ export const AdminManager: React.FC<Props> = ({
                           autoComplete="new-password"
                         />
                         <SecretBadge isSet={authStatus?.roles?.['cx']} />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 cursor-pointer"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-cyan-300 uppercase tracking-wider block mb-1.5">
+                        TFW Info Desk - Sign-in Password
+                      </label>
+                      <div className="relative">
+                        <input 
+                          type={showPassword ? 'text' : 'password'}
+                          value={infoDeskPassword}
+                          onChange={(e) => setInfoDeskPassword(e.target.value)}
+                          className="w-full bg-gray-900 text-white rounded-xl p-3 pr-[4.5rem] text-sm border border-cyan-500/40 outline-none focus:border-cyan-400"
+                          placeholder="Unchanged"
+                          autoComplete="new-password"
+                        />
+                        <SecretBadge isSet={authStatus?.roles?.['information-desk']} />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}

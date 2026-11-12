@@ -1590,6 +1590,7 @@ async function startServer() {
 
   const roleSessionKey = loadRoleSessionKey({ sessionSecret: String(process.env.SESSION_SECRET || ''), getMeta: key => getAppMeta(key), setMeta: (key, value) => setAppMeta(key, value) });
   const roleSessions = createRoleSessions(roleSessionKey, () => memoryDb);
+  app.use('/api', (req, res, next) => { roleSessions.refresh(req, res); next(); });
   registerRoleAuthRoutes(app, { getDb: loadDatabase, save: saveDatabaseToDisk, logActivity, sessions: roleSessions });
   const callerHasRole = (req: express.Request) => {
     const scopes = roleSessions.read(req);

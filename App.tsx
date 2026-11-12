@@ -676,7 +676,7 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
         logout();
     }, [currentUser, logAction, logout]);
 
-    // The server refused a privileged action because this device has no recent sign-in for the role.
+    // The server refused a privileged action because this device has no server sign-in for the role yet.
     const handleLogoutRef = useRef(handleLogout);
     handleLogoutRef.current = handleLogout;
     useEffect(() => {
@@ -687,11 +687,11 @@ const AppContent: React.FC<AppContentProps> = ({ onReturnToHub }) => {
             lastShown = now;
             setConfirmDialog({
                 isOpen: true,
-                title: 'Please sign in again',
-                message: 'For security, this action needs a recent sign-in on this device. Sign out, sign in again, then repeat the action.',
+                title: 'Sign in once more',
+                message: 'This device needs one more sign-in. Sign out, sign in with your usual password, then try again. You stay signed in after that.',
                 confirmLabel: 'Sign out',
                 cancelLabel: 'Not now',
-                confirmVariant: 'warning',
+                confirmVariant: 'primary',
                 onConfirm: () => handleLogoutRef.current()
             });
         };

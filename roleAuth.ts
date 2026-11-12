@@ -25,7 +25,9 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEYLEN = 32;
 const MAX_SCRYPT_MEM = 256 * 1024 * 1024;
-export const ROLE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+// Browsers cap a cookie at 400 days; a session in use slides forward once a day, so a working device never signs in again.
+export const ROLE_SESSION_TTL_MS = 400 * 24 * 60 * 60 * 1000;
+const ROLE_SESSION_REFRESH_MS = 24 * 60 * 60 * 1000;
 const ROLE_COOKIE = 'tfw_role_session';
 const STAFF_KEY_RE = /^operator_([A-Za-z0-9-]{1,40})$/;
 
@@ -682,12 +684,22 @@ export function createRoleSessions(key: Buffer, getDb: () => any) {
   function setCookie(req: express.Request, res: express.Response, value: string, maxAgeSeconds: number) {
     const parts = [`${ROLE_COOKIE}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Max-Age=${maxAgeSeconds}`];
     if (isHttps(req)) parts.push('Secure');
-    res.append('Set-Cookie', parts.join('; '));
+    // A sign-in or sign-out later in the same request replaces the refresh, so each answer sets the cookie once.
+    const prev = res.getHeader('Set-Cookie');
+    const others = (Array.isArray(prev) ? prev : prev === undefined ? [] : [String(prev)]).filter(c => !c.startsWith(`${ROLE_COOKIE}=`));
+    res.setHeader('Set-Cookie', [...others, parts.join('; ')]);
   }
 
   return {
     read(req: express.Request): SessionScope[] {
       return decode(readCookie(req, ROLE_COOKIE));
+    },
+    /** Moves the expiry of a session in use forward, at most once a day; costs one HMAC, never a password check. */
+    refresh(req: express.Request, res: express.Response) {
+      const scopes = this.read(req);
+      const now = Date.now();
+      if (!scopes.some(sc => sc.e < now + ROLE_SESSION_TTL_MS - ROLE_SESSION_REFRESH_MS)) return;
+      this.issue(req, res, scopes.map(sc => ({ ...sc, e: now + ROLE_SESSION_TTL_MS })));
     },
     issue(req: express.Request, res: express.Response, scopes: SessionScope[]) {
       if (scopes.length === 0) return setCookie(req, res, '', 0);
@@ -737,6 +749,24 @@ const ROLE_ACCEPTS: Record<string, RoleSecretKey[]> = {
   'info-desk-add': ['info-desk-add', 'admin'],
   'info-desk-edit': ['info-desk-edit', 'admin']
 };
+// What the old sign-in screens accepted besides the configured value. Through ROLE_ACCEPTS, 'admin79' opens every role.
+const BUILT_IN_PASSWORDS: Partial<Record<RoleSecretKey, string[]>> = {
+  admin: ['admin79'],
+  management: ['manage79', 'management79'],
+  'operation-officer': ['ops79'],
+  maintenance: ['maint', 'tech', 'maintenance'],
+  'maintenance-kpi': ['kpi123'],
+  cx: ['cx79', 'cx123'],
+  'information-desk': ['info79']
+};
+
+// Migration, restored backups and INITIAL_ADMIN_PASSWORD write pv 1, the change routes at least 2 (changedPv), so
+// a role keeps its built-in passwords until someone changes its password on the server.
+function builtInPasswords(key: RoleSecretKey, s: RoleSecret | null): string[] {
+  return !s || (Number(s.pv) || 1) === 1 ? BUILT_IN_PASSWORDS[key] || [] : [];
+}
+
+const changedPv = (s: RoleSecret | undefined) => Math.max(2, (Number(s?.pv) || 0) + 1);
 
 function operatorExists(db: any, id: string): any {
   const ops = db?.config?.operators;
@@ -850,13 +880,15 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
     let deps: Record<string, number> = {};
     let blockedMs = 0;
     let busy = false;
+    let builtIn = false;
     const failedSecrets: string[] = [];
     // Staff passwords are limited per address only, so nobody can lock a named operator out from another device.
-    const tryHashes = async (limiterKey: string | null, hashes: unknown[]): Promise<boolean> => {
+    const tryHashes = async (limiterKey: string | null, hashes: unknown[], builtIns: string[] = []): Promise<boolean> => {
       if (limiterKey) {
         const wait = secretLimiter.blockedForMs(limiterKey);
         if (wait > 0) { blockedMs = Math.max(blockedMs, wait); return false; }
       }
+      if (builtIns.some(b => safeEqual(input, b))) { builtIn = true; return true; }
       for (const h of hashes) {
         if (!isHashed(h)) continue;
         const ok = await withScryptSlot(() => verifySecret(input, h));
@@ -879,9 +911,10 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
       for (const k of accepts) {
         if (via || busy) break;
         const s = roleSecret(db, k);
-        if (s && await tryHashes(`role:${k}`, [s.hash, s.legacyHash])) {
+        const builtIns = builtInPasswords(k, s);
+        if ((s || builtIns.length) && await tryHashes(`role:${k}`, s ? [s.hash, s.legacyHash] : [], builtIns)) {
           via = k;
-          deps = { [`role:${k}`]: Number(s.pv) || 1 };
+          deps = s ? { [`role:${k}`]: Number(s.pv) || 1 } : { [`none:${k}`]: 0 };
         }
       }
     }
@@ -901,7 +934,7 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
     }
 
     loginLimiter.reset(limitKey);
-    audit(req, purpose === 'unlock' ? 'unlock ok' : 'login ok', true, { role, staffKey: staff?.key, purpose, via }, actor);
+    audit(req, purpose === 'unlock' ? 'unlock ok' : 'login ok', true, { role, staffKey: staff?.key, purpose, via, ...(builtIn ? { builtIn } : {}) }, actor);
 
     // The kiosk unlocks only open local screens, so they need no server session.
     if (KIOSK_ROLES.has(role)) return res.json({ ok: true, role, scopes: [], expiresAt: null });
@@ -1057,7 +1090,7 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
     const roles = ensureAuthSecrets(db);
     const now = new Date().toISOString();
     for (const k of keys) {
-      roles[k] = { hash: hashes[k]!, pv: (Number(roles[k]?.pv) || 0) + 1, updatedAt: now };
+      roles[k] = { hash: hashes[k]!, pv: changedPv(roles[k]), updatedAt: now };
     }
     for (const k of remove) delete roles[k];
     const status = publicAuthStatus(db);
@@ -1083,7 +1116,7 @@ export function registerRoleAuthRoutes(app: express.Express, deps: RoleAuthDeps)
     const updates: Record<string, any> = { 'config/appConfig/maintenanceKpiUser': newUser };
     if (hash) {
       const roles = ensureAuthSecrets(db);
-      roles['maintenance-kpi'] = { hash, pv: (Number(roles['maintenance-kpi']?.pv) || 0) + 1, updatedAt: new Date().toISOString() };
+      roles['maintenance-kpi'] = { hash, pv: changedPv(roles['maintenance-kpi']), updatedAt: new Date().toISOString() };
       updates['config/authStatus'] = publicAuthStatus(db);
     }
     save({ type: 'update', updates, senderId: 'role-auth' }, true);
